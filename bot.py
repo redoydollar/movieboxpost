@@ -186,7 +186,7 @@ def fetch_movie_data(movie_name):
 # --- BOT COMMANDS ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "🌟 Welcome to BD Movie Zone Bot!")
+    bot.send_message(message.chat.id, "🌟 Welcome to Movie Box Post Bot!")
 
 # --- SETTING COMMANDS ---
 @bot.message_handler(commands=['set_tmdb'])

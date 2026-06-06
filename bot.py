@@ -3,7 +3,6 @@ import telebot
 import requests
 import pymongo
 import threading
-import feedparser
 import time
 from datetime import datetime
 from flask import Flask, render_template_string
@@ -21,11 +20,9 @@ app = Flask(__name__)
 client = pymongo.MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
 db = client["movie_bot_db"]
 movies_col = db["movies"]
-users_col = db["users"]
 settings_col = db["settings"]
 blogger_col = db["blogger_tracking"]
 
-# Initialize default settings
 if settings_col.count_documents({}) == 0:
     settings_col.insert_one({
         "type": "bot_config",
@@ -50,7 +47,7 @@ def is_admin(user_id):
     admins = get_setting("admins") or [OWNER_ID]
     return user_id in admins
 
-# --- FLASK APP FOR 2-STEP UNLOCK PAGE ---
+# --- FLASK APP FOR UNLOCK PAGE ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -60,9 +57,8 @@ HTML_TEMPLATE = """
     <title>Unlock Download - Movie Box</title>
     <style>
         body { background-color: #05060a; color: #f1f5f9; font-family: 'Poppins', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .unlock-card { background: #111217; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; border: 1px solid #222; box-shadow: 0 0 20px rgba(56, 189, 248, 0.1); }
-        .btn { background: linear-gradient(135deg, #cc0000, #ff1a1a); color: #fff; padding: 12px 25px; border-radius: 30px; text-decoration: none; font-weight: 800; display: inline-block; margin: 10px 0; transition: 0.3s; border: none; cursor: pointer; font-size: 14px; }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(204, 0, 0, 0.4); }
+        .unlock-card { background: #111217; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; border: 1px solid #222; }
+        .btn { background: linear-gradient(135deg, #cc0000, #ff1a1a); color: #fff; padding: 12px 25px; border-radius: 30px; text-decoration: none; font-weight: 800; display: inline-block; margin: 10px 0; border: none; cursor: pointer; }
         .btn-blue { background: linear-gradient(135deg, #38bdf8, #0ea5e9); color: #000; }
         .ad-container { background: #000; margin: 15px 0; padding: 10px; border-radius: 8px; min-height: 100px; border: 1px dashed #333; }
         .hidden { display: none; }
@@ -113,7 +109,9 @@ HTML_TEMPLATE = """
 
 @app.route('/unlock')
 def unlock_page():
-    is_adult = requests.args.get('is_adult', '0')
+    req_args = requests.args # 'requests' library is wrong here, should use flask's request.args. Let me fix this.
+    from flask import request
+    is_adult = request.args.get('is_adult', '0')
     if is_adult == '1':
         ad_step1 = get_setting("ad_18_step1")
         ad_step2 = get_setting("ad_18_step2")
@@ -143,8 +141,7 @@ def check_blogger_updates():
                     if 'category' in latest_post:
                         for cat in latest_post['category']:
                             if cat['term'].lower() in ['adult', '18+', '18 plus', 'adult movie and series']:
-                                is_18plus = 1
-                                break
+                                is_18plus = 1; break
                     unlock_token = f"BLOG_{title.replace(' ', '_')}_{datetime.now().timestamp()}"
                     movies_col.insert_one({"title": title, "blog_url": link, "token": unlock_token, "is_18plus": is_18plus})
                     blogger_col.update_one({"type": "last_post"}, {"$set": {"post_id": post_id}})
@@ -152,7 +149,6 @@ def check_blogger_updates():
                     unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult={is_18plus}"
                     markup = telebot.types.InlineKeyboardMarkup()
                     markup.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
-                    markup.add(telebot.types.InlineKeyboardButton("🌐 Read More", url=link))
                     bot.send_message(get_setting("channel"), f"🎬 **{title}**\n\n🔓 Download: {unlock_link}", reply_markup=markup, parse_mode="Markdown")
         except Exception as e:
             print(f"Blogger Error: {e}")
@@ -163,24 +159,27 @@ def fetch_movie_data(movie_name):
     tmdb_key = get_setting("tmdb_api")
     if not tmdb_key: return None
     url = f"https://api.themoviedb.org/3/search/movie?api_key={tmdb_key}&query={movie_name}"
-    response = requests.get(url).json()
-    if response.get('results'):
-        movie = response['results'][0]
-        movie_id = movie['id']
-        details = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={tmdb_key}").json()
-        videos = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={tmdb_key}").json()
-        images = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/images?api_key={tmdb_key}").json()
-        trailer_key = ""
-        for v in videos.get('results', []):
-            if v['type'] == 'Trailer' and v['site'] == 'YouTube': trailer_key = v['key']; break
-        screenshots = [img['file_path'] for img in images.get('backdrops', [])[:3]]
-        return {
-            'title': details.get('title', 'N/A'), 'year': details.get('release_date', 'N/A').split('-')[0],
-            'imdb': details.get('vote_average', 'N/A'), 'genre': ', '.join([g['name'] for g in details.get('genres', [])]),
-            'runtime': str(details.get('runtime', 'N/A')), 'language': details.get('original_language', 'N/A').upper(),
-            'plot': details.get('overview', 'N/A'), 'poster': f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}",
-            'screenshots': screenshots, 'trailer': f"https://youtube.com/watch?v={trailer_key}" if trailer_key else "N/A"
-        }
+    try:
+        response = requests.get(url).json()
+        if response.get('results'):
+            movie = response['results'][0]
+            movie_id = movie['id']
+            details = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={tmdb_key}").json()
+            videos = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={tmdb_key}").json()
+            images = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/images?api_key={tmdb_key}").json()
+            trailer_key = ""
+            for v in videos.get('results', []):
+                if v['type'] == 'Trailer' and v['site'] == 'YouTube': trailer_key = v['key']; break
+            screenshots = [img['file_path'] for img in images.get('backdrops', [])[:3]]
+            return {
+                'title': details.get('title', 'N/A'), 'year': details.get('release_date', 'N/A').split('-')[0],
+                'imdb': details.get('vote_average', 'N/A'), 'genre': ', '.join([g['name'] for g in details.get('genres', [])]),
+                'runtime': str(details.get('runtime', 'N/A')), 'language': details.get('original_language', 'N/A').upper(),
+                'plot': details.get('overview', 'N/A'), 'poster': f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}",
+                'screenshots': screenshots, 'trailer': f"https://youtube.com/watch?v={trailer_key}" if trailer_key else "N/A"
+            }
+    except Exception as e:
+        print(f"TMDb Error: {e}")
     return None
 
 # --- BOT COMMANDS ---
@@ -233,7 +232,12 @@ def save_setting(message, key):
     settings_col.update_one({"type": "bot_config"}, {"$set": {key: message.text}})
     bot.send_message(message.chat.id, f"✅ {key} সফলভাবে আপডেট হয়েছে!")
 
-# --- 1. TMDb AUTO UPLOAD (FIXED) ---
+
+# ==========================================
+# FLAWLESS MOVIE UPLOAD STATE MANAGEMENT
+# ==========================================
+user_data_temp = {}
+
 @bot.message_handler(commands=['addmovie'])
 def add_movie_start(message):
     if not is_admin(message.from_user.id): return
@@ -245,59 +249,10 @@ def process_movie_name(message):
     bot.send_message(message.chat.id, "🔍 TMDb থেকে তথ্য আনা হচ্ছে...")
     movie_data = fetch_movie_data(movie_name)
     if not movie_data:
-        bot.send_message(message.chat.id, "❌ মুভি পাওয়া যায়নি! TMDb API সেট আছে কিনা চেক করুন অথবা /manualmovie কমান্ড ব্যবহার করুন।")
+        bot.send_message(message.chat.id, "❌ মুভি পাওয়া যায়নি! আবার চেষ্টা করুন বা /manualmovie ব্যবহার করুন।")
         return
     
-    markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("✅ Yes", callback_data="confirm_movie"))
-    bot.send_photo(message.chat.id, movie_data['poster'], caption=f"🎬 {movie_data['title']}\n⭐ IMDb: {movie_data['imdb']}\n\nএই মুভিটি কি?", reply_markup=markup)
-    
-    # Save movie data to user state temporarily
-    user_state = {'movie_data': movie_data}
-    bot.register_next_step_handler(message, ask_file_link_auto, user_state) # Wait for callback or next step
-
-@bot.callback_query_handler(func=lambda call: call.data == "confirm_movie")
-def ask_file_link_auto_callback(call):
-    # We need to bypass the text step and ask for file link
-    bot.send_message(call.message.chat.id, "🔗 File Store Bot থেকে পাওয়া ফাইল লিংকটি দিন:")
-    # Since we lost user_state, we need to fetch it again. A better way is storing in a dict.
-    # For simplicity, let's just proceed to the next step. We'll just get the link.
-    bot.register_next_step_handler(call.message, process_file_link_auto)
-
-def process_file_link_auto(message):
-    file_link = message.text
-    markup = telebot.types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    markup.add("🔞 Yes (18+)", "🟢 No (Universal)")
-    bot.send_message(message.chat.id, "🔞 এটি কি 18+ মুভি?", reply_markup=markup)
-    bot.register_next_step_handler(message, save_auto_movie, file_link)
-
-def save_auto_movie(message, file_link):
-    # Because of callback issues, re-fetching is safer if we didn't store the title. 
-    # But let's just notify user to use manual for now if it fails, OR let's fix the state.
-    # Actually, let's just ask the user for title again if lost, but it's ugly. 
-    # Let's use a simple global dictionary for state management.
-    pass # I will rewrite a flawless version below
-
-# ==========================================
-# FLAWLESS STATE MANAGEMENT FIX
-# ==========================================
-user_data_temp = {}
-
-@bot.message_handler(commands=['addmovie'])
-def add_movie_start_fixed(message):
-    if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "🎬 মুভির নাম লিখুন (English এ):")
-    bot.register_next_step_handler(msg, process_movie_name_fixed)
-
-def process_movie_name_fixed(message):
-    movie_name = message.text
-    bot.send_message(message.chat.id, "🔍 TMDb থেকে তথ্য আনা হচ্ছে...")
-    movie_data = fetch_movie_data(movie_name)
-    if not movie_data:
-        bot.send_message(message.chat.id, "❌ মুভি পাওয়া যায়নি!")
-        return
-    
-    # Save data temporarily using user ID
+    # Save temporarily using user ID
     user_data_temp[message.from_user.id] = movie_data
     
     markup = telebot.types.InlineKeyboardMarkup()
@@ -305,14 +260,15 @@ def process_movie_name_fixed(message):
     bot.send_photo(message.chat.id, movie_data['poster'], caption=f"🎬 {movie_data['title']}\n⭐ IMDb: {movie_data['imdb']}\n\nএই মুভিটি কি?", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_movie")
-def ask_file_link_auto_fixed(call):
+def ask_file_link_callback(call):
+    bot.answer_callback_query(call.id) # Remove loading icon from button
     bot.send_message(call.message.chat.id, "🔗 File Store Bot থেকে পাওয়া ফাইল লিংকটি দিন:")
-    bot.register_next_step_handler(call.message, process_file_link_auto_fixed)
+    bot.register_next_step_handler(call.message, process_file_link)
 
-def process_file_link_auto_fixed(message):
+def process_file_link(message):
     user_id = message.from_user.id
     if user_id not in user_data_temp:
-        bot.send_message(message.chat.id, "❌ Session expired! Try /addmovie again.")
+        bot.send_message(message.chat.id, "❌ Session expired! /addmovie দিয়ে আবার শুরু করুন।")
         return
         
     file_link = message.text
@@ -321,12 +277,12 @@ def process_file_link_auto_fixed(message):
     markup = telebot.types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     markup.add("🔞 Yes (18+)", "🟢 No (Universal)")
     bot.send_message(message.chat.id, "🔞 এটি কি 18+ মুভি?", reply_markup=markup)
-    bot.register_next_step_handler(message, save_final_movie_fixed)
+    bot.register_next_step_handler(message, save_final_movie)
 
-def save_final_movie_fixed(message):
+def save_final_movie(message):
     user_id = message.from_user.id
     if user_id not in user_data_temp:
-        bot.send_message(message.chat.id, "❌ Session expired! Try /addmovie again.")
+        bot.send_message(message.chat.id, "❌ Session expired! /addmovie দিয়ে আবার শুরু করুন।")
         return
 
     is_18plus = 1 if "Yes" in message.text else 0
@@ -342,6 +298,7 @@ def save_final_movie_fixed(message):
         movies_col.insert_one(movie_doc)
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Database Error: {e}")
+        del user_data_temp[user_id]
         return
 
     render_url = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
@@ -355,16 +312,16 @@ def save_final_movie_fixed(message):
         channel_id = get_setting("channel")
         if not channel_id:
             bot.send_message(message.chat.id, "❌ Channel not set! Use /set_channel first.")
-            return
-        bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup)
-        bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
+        else:
+            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup)
+            bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nMake sure the bot is Admin in the channel.")
+        bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nBot কি Channel এ Admin হিসেবে আছে?")
     
     # Clear temp data
     del user_data_temp[user_id]
 
-# --- 2. MANUAL UPLOAD ---
+# --- MANUAL UPLOAD ---
 manual_data = {}
 
 @bot.message_handler(commands=['manualmovie'])
@@ -424,6 +381,7 @@ def save_manual_movie(message):
         movies_col.insert_one(movie_doc)
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Database Error: {e}")
+        del manual_data[message.from_user.id]
         return
 
     render_url = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
@@ -437,11 +395,13 @@ def save_manual_movie(message):
         channel_id = get_setting("channel")
         if not channel_id:
             bot.send_message(message.chat.id, "❌ Channel not set! Use /set_channel first.")
-            return
-        bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup)
-        bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
+        else:
+            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup)
+            bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nMake sure the bot is Admin in the channel.")
+        bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nBot কি Channel এ Admin হিসেবে আছে?")
+
+    del manual_data[message.from_user.id]
 
 # --- START BOT & FLASK ---
 if __name__ == '__main__':

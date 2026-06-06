@@ -5,7 +5,7 @@ import pymongo
 import threading
 import time
 from datetime import datetime
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, request # Fixed import here
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -47,7 +47,7 @@ def is_admin(user_id):
     admins = get_setting("admins") or [OWNER_ID]
     return user_id in admins
 
-# --- FLASK APP FOR UNLOCK PAGE ---
+# --- FLASK APP FOR UNLOCK PAGE (FIXED) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -109,9 +109,7 @@ HTML_TEMPLATE = """
 
 @app.route('/unlock')
 def unlock_page():
-    req_args = requests.args # 'requests' library is wrong here, should use flask's request.args. Let me fix this.
-    from flask import request
-    is_adult = request.args.get('is_adult', '0')
+    is_adult = request.args.get('is_adult', '0') # FIXED BUG HERE
     if is_adult == '1':
         ad_step1 = get_setting("ad_18_step1")
         ad_step2 = get_setting("ad_18_step2")
@@ -124,7 +122,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# --- BLOGGER AUTO-UPLOAD CHECKER ---
+# --- BLOGGER AUTO-UPLOAD CHECKER (BEAUTIFUL FORMAT) ---
 def check_blogger_updates():
     while True:
         try:
@@ -145,11 +143,24 @@ def check_blogger_updates():
                     unlock_token = f"BLOG_{title.replace(' ', '_')}_{datetime.now().timestamp()}"
                     movies_col.insert_one({"title": title, "blog_url": link, "token": unlock_token, "is_18plus": is_18plus})
                     blogger_col.update_one({"type": "last_post"}, {"$set": {"post_id": post_id}})
-                    render_url = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
+                    
+                    render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
                     unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult={is_18plus}"
+                    
+                    # Beautiful HTML Format for Auto Post
+                    channel_text = f"""
+🎬 <b>{title}</b>
+
+🔓 <b>Download Link:</b> 
+<a href="{unlock_link}">⬇️ Click Here to Unlock & Download</a>
+
+⚠️ <i>কপিরাইট ইস্যু থাকলে যোগাযোগ করুন।</i>
+"""
                     markup = telebot.types.InlineKeyboardMarkup()
                     markup.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
-                    bot.send_message(get_setting("channel"), f"🎬 **{title}**\n\n🔓 Download: {unlock_link}", reply_markup=markup, parse_mode="Markdown")
+                    markup.add(telebot.types.InlineKeyboardButton("🌐 Read More", url=link))
+                    
+                    bot.send_message(get_setting("channel"), channel_text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:
             print(f"Blogger Error: {e}")
         time.sleep(120)
@@ -234,7 +245,7 @@ def save_setting(message, key):
 
 
 # ==========================================
-# FLAWLESS MOVIE UPLOAD STATE MANAGEMENT
+# MOVIE UPLOAD (WITH BEAUTIFUL HTML BUTTONS)
 # ==========================================
 user_data_temp = {}
 
@@ -252,7 +263,6 @@ def process_movie_name(message):
         bot.send_message(message.chat.id, "❌ মুভি পাওয়া যায়নি! আবার চেষ্টা করুন বা /manualmovie ব্যবহার করুন।")
         return
     
-    # Save temporarily using user ID
     user_data_temp[message.from_user.id] = movie_data
     
     markup = telebot.types.InlineKeyboardMarkup()
@@ -261,7 +271,7 @@ def process_movie_name(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_movie")
 def ask_file_link_callback(call):
-    bot.answer_callback_query(call.id) # Remove loading icon from button
+    bot.answer_callback_query(call.id) 
     bot.send_message(call.message.chat.id, "🔗 File Store Bot থেকে পাওয়া ফাইল লিংকটি দিন:")
     bot.register_next_step_handler(call.message, process_file_link)
 
@@ -270,7 +280,6 @@ def process_file_link(message):
     if user_id not in user_data_temp:
         bot.send_message(message.chat.id, "❌ Session expired! /addmovie দিয়ে আবার শুরু করুন।")
         return
-        
     file_link = message.text
     user_data_temp[user_id]['file_link'] = file_link
     
@@ -301,24 +310,37 @@ def save_final_movie(message):
         del user_data_temp[user_id]
         return
 
-    render_url = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
+    render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
     unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult={is_18plus}"
     
-    channel_text = f"🎬 {title} ({year})\n⭐ IMDb: {imdb}/10\n🎭 Genre: {genre}\n\n🔓 Download: {unlock_link}"
+    # Beautiful HTML Format for Channel Post
+    channel_text = f"""
+🎬 <b>{title}</b> ({year})
+⭐ <b>IMDb:</b> {imdb}/10
+🎭 <b>Genre:</b> {genre}
+🌐 <b>Language:</b> {language}
+
+🔓 <b>Download Link:</b> 
+<a href="{unlock_link}">⬇️ Click Here to Unlock & Download</a>
+
+⚠️ <i>কপিরাইট ইস্যু থাকলে যোগাযোগ করুন।</i>
+"""
+    
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
+    if data.get('trailer') and data['trailer'] != "N/A":
+        markup.add(telebot.types.InlineKeyboardButton("▶️ Watch Trailer", url=data['trailer']))
     
     try:
         channel_id = get_setting("channel")
         if not channel_id:
             bot.send_message(message.chat.id, "❌ Channel not set! Use /set_channel first.")
         else:
-            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup)
+            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup, parse_mode="HTML")
             bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nBot কি Channel এ Admin হিসেবে আছে?")
     
-    # Clear temp data
     del user_data_temp[user_id]
 
 # --- MANUAL UPLOAD ---
@@ -384,10 +406,21 @@ def save_manual_movie(message):
         del manual_data[message.from_user.id]
         return
 
-    render_url = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
+    render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
     unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult={is_18plus}"
     
-    channel_text = f"🎬 {title} ({year})\n⭐ IMDb: {imdb}/10\n🎭 Genre: {genre}\n\n🔓 Download: {unlock_link}"
+    channel_text = f"""
+🎬 <b>{title}</b> ({year})
+⭐ <b>IMDb:</b> {imdb}/10
+🎭 <b>Genre:</b> {genre}
+🌐 <b>Language:</b> {language}
+
+🔓 <b>Download Link:</b> 
+<a href="{unlock_link}">⬇️ Click Here to Unlock & Download</a>
+
+⚠️ <i>কপিরাইট ইস্যু থাকলে যোগাযোগ করুন।</i>
+"""
+    
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
     
@@ -396,7 +429,7 @@ def save_manual_movie(message):
         if not channel_id:
             bot.send_message(message.chat.id, "❌ Channel not set! Use /set_channel first.")
         else:
-            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup)
+            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup, parse_mode="HTML")
             bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nBot কি Channel এ Admin হিসেবে আছে?")

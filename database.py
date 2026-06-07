@@ -12,50 +12,33 @@ class Database:
         self.users = self.db["users"]
         self.tokens = self.db["tokens"]
         self.settings = self.db["settings"]
-        try:
-            self.files.create_index([("file_name", "text")])
-        except:
-            pass
 
     def add_file(self, file_id, file_unique_id, file_name, file_size, caption, message_id, channel_id):
-        try:
-            if self.files.find_one({"file_unique_id": file_unique_id}):
-                return False
-            self.files.insert_one({
-                "file_id": file_id,
-                "file_unique_id": file_unique_id,
-                "file_name": file_name,
-                "file_size": file_size,
-                "caption": caption or "",
-                "message_id": message_id,
-                "channel_id": channel_id
-            })
-            return True
-        except:
+        if self.files.find_one({"file_unique_id": file_unique_id}):
             return False
+        self.files.insert_one({
+            "file_id": file_id, "file_unique_id": file_unique_id,
+            "file_name": file_name, "file_size": file_size,
+            "caption": caption or "", "message_id": message_id,
+            "channel_id": channel_id
+        })
+        return True
 
     def search_files(self, query, limit=6):
-        try:
-            regex = re.compile(re.escape(query), re.IGNORECASE)
-            results = list(self.files.find({"file_name": regex}).limit(limit))
-            if not results:
+        regex = re.compile(re.escape(query), re.IGNORECASE)
+        results = list(self.files.find({"file_name": regex}).limit(limit))
+        if not results:
+            try:
                 results = list(self.files.find({"$text": {"$search": query}}).limit(limit))
-            return results
-        except:
-            return []
+            except:
+                pass
+        return results
 
     def total_files(self):
         return self.files.count_documents({})
 
     def add_user(self, user_id, first_name, username=""):
-        try:
-            self.users.update_one(
-                {"user_id": user_id},
-                {"$set": {"first_name": first_name, "username": username}},
-                upsert=True
-            )
-        except:
-            pass
+        self.users.update_one({"user_id": user_id}, {"$set": {"first_name": first_name, "username": username}}, upsert=True)
 
     def is_banned(self, user_id):
         user = self.users.find_one({"user_id": user_id})
@@ -74,59 +57,33 @@ class Database:
 
     def create_token(self, user_id, file_id, file_name, is_adult):
         token = secrets.token_hex(16)
-        try:
-            self.tokens.insert_one({
-                "token": token,
-                "user_id": user_id,
-                "file_id": file_id,
-                "file_name": file_name,
-                "is_adult": is_adult,
-                "verified": False,
-                "created_at": datetime.now(),
-                "expires_at": datetime.now() + timedelta(seconds=VERIFY_EXPIRE_SECONDS)
-            })
-            return token
-        except:
-            return ""
+        self.tokens.insert_one({
+            "token": token, "user_id": user_id,
+            "file_id": file_id, "file_name": file_name,
+            "is_adult": is_adult, "verified": False,
+            "created_at": datetime.now(),
+            "expires_at": datetime.now() + timedelta(seconds=VERIFY_EXPIRE_SECONDS)
+        })
+        return token
 
     def verify_token(self, token):
-        try:
-            record = self.tokens.find_one({
-                "token": token,
-                "verified": False,
-                "expires_at": {"$gt": datetime.now()}
-            })
-            if record:
-                time_diff = (datetime.now() - record["created_at"]).total_seconds()
-                if time_diff < 19:
-                    return None
-                self.tokens.update_one({"token": token}, {"$set": {"verified": True}})
-                return record
-            return None
-        except:
-            return None
+        record = self.tokens.find_one({"token": token, "verified": False, "expires_at": {"$gt": datetime.now()}})
+        if record:
+            diff = (datetime.now() - record["created_at"]).total_seconds()
+            if diff < 19:
+                return None
+            self.tokens.update_one({"token": token}, {"$set": {"verified": True}})
+            return record
+        return None
 
     def get_verified_token(self, token):
-        try:
-            return self.tokens.find_one({
-                "token": token,
-                "verified": True,
-                "expires_at": {"$gt": datetime.now()}
-            })
-        except:
-            return None
+        return self.tokens.find_one({"token": token, "verified": True, "expires_at": {"$gt": datetime.now()}})
 
     def get_setting(self, key, default=""):
-        try:
-            doc = self.settings.find_one({"key": key})
-            return doc["value"] if doc else default
-        except:
-            return default
+        doc = self.settings.find_one({"key": key})
+        return doc["value"] if doc else default
 
     def set_setting(self, key, value):
-        try:
-            self.settings.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
-        except:
-            pass
+        self.settings.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
 
 db = Database()

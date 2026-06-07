@@ -131,16 +131,16 @@ def callback_query(call):
         if not is_admin(user_id): return
         set_state(user_id, "wait_tmdb_tv_query")
         bot.send_message(user_id, "📺 Send Web Series Name to search in TMDB:")
-        
-        elif data == "admin_add_episode":
+
+    elif data == "admin_add_episode":
         if not is_admin(user_id): return
         series = list(series_col.find({}))
         if not series:
-        bot.send_message(user_id, "❌ কোনো ওয়েব সিরিজ পাওয়া যায়নি। আগে সিরিজ অ্যাড করুন।")
+            bot.send_message(user_id, "❌ No series found. Add a series first.")
             return
         buttons = [[telebot.types.InlineKeyboardButton(s['title'], callback_data=f"addsep_{s['_id']}")] for s in series]
-        bot.send_message(user_id, "📺 যে সিরিজে এপিসোড যোগ করতে চান সেটি সিলেক্ট করুন:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons)
-    
+        bot.send_message(user_id, "📺 Select a series to add episode:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
+        
     elif data.startswith("admin_set_"):
         if not is_admin(user_id): return
         mapping = {"admin_set_ad1": "set_ad_normal_ad1", "admin_set_ad2": "set_ad_normal_ad2", "admin_set_aad1": "set_ad_adult_ad1", "admin_set_aad2": "set_ad_adult_ad2"}

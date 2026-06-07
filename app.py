@@ -10,14 +10,14 @@ from database import db
 from utils import is_adult
 
 # Flask App
-app = Flask(__name__)
+flask_app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def get_ad_url(key, default):
     val = db.get_setting(key, default)
     return val if val else default
 
-# Pyrogram Bot Instance
+# Pyrogram Bot
 bot = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ============= AUTO DELETE FUNCTION =============
@@ -25,22 +25,23 @@ async def auto_delete(client, chat_id, message_id):
     await asyncio.sleep(AUTO_DELETE_SECONDS)
     try:
         await client.delete_messages(chat_id, message_id)
-    except:
-        pass
+    except Exception as e:
+        logging.warning(f"Auto-delete failed: {e}")
 
-# ============= TELEGRAM BOT HANDLERS =============
+# ============= BOT HANDLERS =============
 
 @bot.on_message(filters.command("start") & filters.private)
-async def start(client, message):
+async def start_handler(client, message):
     db.add_user(message.from_user.id, message.from_user.first_name, message.from_user.username or "")
     
     if len(message.command) > 1 and message.command[1].startswith("sendfile_"):
-        token = message.command[1].split("_")[1]
+        token = message.command[1].split("_", 1)[1]
         record = db.get_verified_token(token)
         if record:
             try:
                 msg = await client.send_document(
-                    record['user_id'], record['file_id'], 
+                    record['user_id'],
+                    record['file_id'], 
                     caption=f"**🎬 {record['file_name']}**\n\n⏳ এই ফাইলটি ৩০ মিনিট পর অটো ডিলিট হয়ে যাবে!"
                 )
                 asyncio.create_task(auto_delete(client, msg.chat.id, msg.id))
@@ -49,12 +50,15 @@ async def start(client, message):
             return
             
     await message.reply_text(
-        f"**স্বাগতম {message.from_user.first_name}! 🎬**\n\nআমি একটি মুভি বট। আপনার পছন্দের মুভি খুঁজতে সরাসরি মুভির নাম লিখুন।",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Search Movie", switch_inline_query_current_chat="")]])
+        f"**স্বাগতম {message.from_user.first_name}! 🎬**\n\n"
+        "আমি একটি মুভি বট। মুভি খুঁজতে সরাসরি নাম লিখুন।",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔍 Search Movie", switch_inline_query_current_chat="")]
+        ])
     )
 
 @bot.on_message(filters.private & filters.text & ~filters.command(["start", "stats", "ban", "unban", "set_ad"]))
-async def search_movie(client, message):
+async def search_handler(client, message):
     if db.is_banned(message.from_user.id):
         return await message.reply("❌ আপনি ব্যান করা আছেন।")
 
@@ -63,72 +67,105 @@ async def search_movie(client, message):
             try:
                 member = await client.get_chat_member(ch, message.from_user.id)
                 if member.status in [enums.ChatMemberStatus.LEFT, enums.ChatMemberStatus.BANNED]:
-                    return await message.reply("**❌ প্রথমে চ্যানেলে জয়েন করুন!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)]]))
-            except: pass
+                    return await message.reply(
+                        "**❌ প্রথমে চ্যানেলে জয়েন করুন!**",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)]
+                        ])
+                    )
+            except Exception:
+                pass
 
     query = message.text.strip()
     results = db.search_files(query, limit=MAX_RESULTS)
+    
     if not results:
         return await message.reply("**❌ কোনো মুভি পাওয়া যায়নি!** অন্য নামে খুঁজুন।")
 
-    for file in results:
-        is_18 = is_adult(file['file_name'])
-        token = db.create_token(message.from_user.id, file['file_id'], file['file_name'], is_18)
+    for file_doc in results:
+        is_18 = is_adult(file_doc['file_name'])
+        token = db.create_token(message.from_user.id, file_doc['file_id'], file_doc['file_name'], is_18)
         ad_type = "adult" if is_18 else "normal"
         verify_url = f"{BASE_URL}/verify?token={token}&type={ad_type}"
 
-        btn = InlineKeyboardMarkup([[InlineKeyboardButton("📥 Download File", url=verify_url)]])
-        caption = f"**🎬 {file['file_name']}**\n\n📦 Size: `{file['file_size']}`\n{'⚠️ 18+ Content' if is_18 else ''}"
+        btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📥 Download File", url=verify_url)]
+        ])
+        
+        size_str = str(file_doc['file_size'])
+        caption = f"**🎬 {file_doc['file_name']}**\n\n📦 Size: `{size_str}`\n"
+        if is_18:
+            caption += "⚠️ 18+ Content"
+        
         await message.reply_text(caption, reply_markup=btn, quote=True)
 
 @bot.on_message(filters.command("stats") & filters.user(OWNER_ID))
-async def stats(client, message):
-    await message.reply(f"**📊 Bot Stats:**\n\n👥 Total Users: {db.total_users()}\n📁 Total Files: {db.total_files()}")
+async def stats_handler(client, message):
+    total_users = db.total_users()
+    total_files = db.total_files()
+    await message.reply(f"**📊 Bot Stats:**\n\n👥 Total Users: {total_users}\n📁 Total Files: {total_files}")
 
 @bot.on_message(filters.command("set_ad") & filters.user(OWNER_ID))
-async def set_ad(client, message):
+async def set_ad_handler(client, message):
     args = message.text.split()
-    if len(args) < 3: return await message.reply("Usage: `/set_ad normal_ad_1 https://link.com`", quote=True)
+    if len(args) < 3:
+        return await message.reply("Usage: `/set_ad normal_ad_1 https://link.com`", quote=True)
     db.set_setting(args[1], args[2])
     await message.reply(f"✅ Ad updated for `{args[1]}`")
 
 @bot.on_message(filters.command("ban") & filters.user(OWNER_ID))
-async def ban_user(client, message):
+async def ban_handler(client, message):
     args = message.text.split()
-    if len(args) < 2: return await message.reply("Usage: `/ban user_id`", quote=True)
-    db.ban_user(int(args[1]))
-    await message.reply(f"✅ User `{args[1]}` banned.")
+    if len(args) < 2:
+        return await message.reply("Usage: `/ban user_id`", quote=True)
+    try:
+        db.ban_user(int(args[1]))
+        await message.reply(f"✅ User `{args[1]}` banned.")
+    except ValueError:
+        await message.reply("❌ Invalid user ID.")
 
 @bot.on_message(filters.command("unban") & filters.user(OWNER_ID))
-async def unban_user(client, message):
+async def unban_handler(client, message):
     args = message.text.split()
-    if len(args) < 2: return await message.reply("Usage: `/unban user_id`", quote=True)
-    db.unban_user(int(args[1]))
-    await message.reply(f"✅ User `{args[1]}` unbanned.")
+    if len(args) < 2:
+        return await message.reply("Usage: `/unban user_id`", quote=True)
+    try:
+        db.unban_user(int(args[1]))
+        await message.reply(f"✅ User `{args[1]}` unbanned.")
+    except ValueError:
+        await message.reply("❌ Invalid user ID.")
 
-# অটো-ইনডেক্সিং 
 @bot.on_message(filters.chat(INDEX_CHANNELS) & (filters.document | filters.video))
-async def auto_index(client, message):
-    file_id = message.document.file_id if message.document else message.video.file_id
-    file_unique_id = message.document.file_unique_id if message.document else message.video.file_unique_id
-    file_name = message.document.file_name if message.document else (message.video.file_name or "Unknown")
-    file_size = message.document.file_size if message.document else message.video.file_size
-    
+async def auto_index_handler(client, message):
+    if message.document:
+        file_id = message.document.file_id
+        file_unique_id = message.document.file_unique_id
+        file_name = message.document.file_name or "Unknown"
+        file_size = message.document.file_size
+    elif message.video:
+        file_id = message.video.file_id
+        file_unique_id = message.video.file_unique_id
+        file_name = message.video.file_name or "Unknown"
+        file_size = message.video.file_size
+    else:
+        return
+
     if db.add_file(file_id, file_unique_id, file_name, file_size, message.caption, message.id, message.chat.id):
         logging.info(f"✅ Auto-Indexed: {file_name}")
 
-# ============= FLASK WEB SERVER =============
+# ============= FLASK ROUTES =============
 
-@app.route('/')
+@flask_app.route('/')
 def home():
     return "✅ CTG Movie Bot is Running!", 200
 
-@app.route('/verify')
+@flask_app.route('/verify')
 def verify_page():
     token = request.args.get('token')
     ad_type = request.args.get('type', 'normal')
-    if not token: return "Invalid Link!", 404
-    
+    if not token:
+        return "Invalid Link!", 404
+
     if ad_type == "adult":
         ad1 = get_ad_url("adult_ad_1", ADULT_AD_1)
         ad2 = get_ad_url("adult_ad_2", ADULT_AD_2)
@@ -138,35 +175,41 @@ def verify_page():
 
     return render_template('verify.html', token=token, ad1=ad1, ad2=ad2, bot_username=BOT_USERNAME)
 
-@app.route('/api/verify', methods=['POST'])
+@flask_app.route('/api/verify', methods=['POST'])
 def api_verify():
     data = request.json
     token = data.get('token')
-    if not token: return jsonify({"status": "error", "message": "Token missing"}), 400
-    
+    if not token:
+        return jsonify({"status": "error", "message": "Token missing"}), 400
+
     record = db.verify_token(token)
     if record:
         return jsonify({"status": "success", "bot_username": BOT_USERNAME, "token": token})
     else:
-        return jsonify({"status": "error", "message": "আপনি ১০ সেকেন্ড অ্যাড দেখেননি! আবার চেষ্টা করুন।"})
+        return jsonify({"status": "error", "message": "ভেরিফিকেশন ব্যর্থ! আবার চেষ্টা করুন।"})
 
-# ============= MAIN RUNNER (THE ULTIMATE FIX) =============
+# ============= MAIN ENTRY POINT =============
+# এই লজিকটা একদম নতুন: Flask মেইন থ্রেডে, Bot ব্যাকগ্রাউন্ডে
 
-def run_flask():
-    """Flask কে Background থ্রেডে চালানোর ফাংশন"""
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
-
-async def run_pyrogram():
-    """Pyrogram কে অ্যাসিঙ্ক্রোনাস ভাবে চালানোর ফাংশন"""
-    await bot.start()
-    logging.info("🚀 Pyrogram Bot Started Successfully!")
-    await asyncio.Event().wait() # বটকে চালু রাখার জন্য
+def run_bot_thread():
+    """Pyrogram Bot কে আলাদা থ্রেডে নিজস্ব Event Loop নিয়ে চালানো"""
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)
+    
+    try:
+        bot_loop.run_until_complete(bot.start())
+        logging.info("🚀 Pyrogram Bot Started Successfully!")
+        bot_loop.run_forever()
+    except Exception as e:
+        logging.error(f"Bot Error: {e}")
 
 if __name__ == '__main__':
-    # ১. প্রথমে Flask কে ব্যাকগ্রাউন্ড থ্রেডে চালু করো
-    threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("✅ Flask Server Started")
+    # Step 1: Bot কে Background Thread এ চালু করো
+    bot_thread = threading.Thread(target=run_bot_thread, daemon=True)
+    bot_thread.start()
+    logging.info("⏳ Bot thread started, waiting for connection...")
     
-    # ২. এরপর Pyrogram কে asyncio.run() দিয়ে মেইন থ্রেডে চালু করো (এটা লুপ এরর ১০০% ফিক্স করবে)
-    asyncio.run(run_pyrogram())
+    # Step 2: Flask কে Main Thread এ চালু করো (Render এর রুল)
+    port = int(os.environ.get('PORT', 5000))
+    logging.info(f"✅ Starting Flask Server on port {port}...")
+    flask_app.run(host='0.0.0.0', port=port, use_reloader=False)

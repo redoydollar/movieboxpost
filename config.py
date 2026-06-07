@@ -10,7 +10,9 @@ BOT_USERNAME = os.environ.get("BOT_USERNAME", "") # @ ছাড়া লিখ�
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 
 # ======== Channels ========
-MOVIE_CHANNEL = int(os.environ.get("MOVIE_CHANNEL", "0"))
+# যেসব চ্যানেল বা গ্রুপ থেকে মুভি ইনডেক্স করতে চান, সেগুলোর আইডি (কমা দিয়ে দেবেন, -100 দিয়ে শুরু)
+INDEX_CHANNELS = [int(x.strip()) for x in os.environ.get("INDEX_CHANNELS", "").split(",") if x.strip()]
+# ফোর্স জয়েন চ্যানেল
 FSUB_CHANNELS = [int(x.strip()) for x in os.environ.get("FSUB_CHANNELS", "").split(",") if x.strip()]
 CHANNEL_LINK = os.environ.get("CHANNEL_LINK", "https://t.me/SakibMovieBox")
 

@@ -213,7 +213,7 @@ def callback_query(call):
         if not is_admin(user_id): return
         mapping = {"admin_set_ad1": "set_ad_normal_ad1", "admin_set_ad2": "set_ad_normal_ad2", "admin_set_aad1": "set_ad_adult_ad1", "admin_set_aad2": "set_ad_adult_ad2"}
         set_state(user_id, mapping[data])
-        bot.send_message(user_id, "🔗 Send the Ad Direct Image Link (URL):\n\n_(Example: https://example.com/ad.jpg)_", parse_mode="Markdown")
+        bot.send_message(user_id, "🔗 Send the Adsterra Direct URL Link:\n\n_(Example: https://www.profitablecpmrate.com/...)_", parse_mode="Markdown")
         
     elif data == "admin_toggle_ads":
         if not is_admin(user_id): return
@@ -303,30 +303,37 @@ def callback_query(call):
         if not ad1 or not ad2:
             bot.send_message(user_id, "⚠️ Ads not set. Use /admin"); return
         
-        wait_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("⏳ Ad 1: Wait...", callback_data="ignore")]])
-        try:
-            ad_msg = bot.send_photo(user_id, ad1, reply_markup=wait_btn)
-        except:
-            ad_msg = bot.send_message(user_id, "🔗 Ad 1 Link:\n" + ad1, reply_markup=wait_btn)
+        # Ad 1 Display Logic (URL Button + Timer)
+        wait_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
+        wait_btn.add(
+            telebot.types.InlineKeyboardButton("🔗 Visit Ad Link", url=ad1),
+            telebot.types.InlineKeyboardButton("⏳ Ad 1: Wait...", callback_data="ignore")
+        )
+        ad_msg = bot.send_message(user_id, "⚠️ *Step 1:* Visit the ad link below and wait a few seconds.", parse_mode="Markdown", reply_markup=wait_btn)
             
-        next_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("➡️ Next Ad", callback_data=f"ad2_{file_identifier}_{ad2}")]])
+        next_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
+        next_btn.add(telebot.types.InlineKeyboardButton("➡️ Next Ad", callback_data=f"ad2_{file_identifier}_{ad2}"))
         threading.Thread(target=ad_timer, args=(user_id, ad_msg.message_id, next_btn)).start()
 
     elif data.startswith('ad2_'):
-        parts = data.split('_'); file_identifier = parts[1]; ad2_file_id = parts[2]
-        wait_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("⏳ Ad 2: Wait...", callback_data="ignore")]])
-        try:
-            ad_msg = bot.send_photo(user_id, ad2_file_id, reply_markup=wait_btn)
-        except:
-            ad_msg = bot.send_message(user_id, "🔗 Ad 2 Link:\n" + ad2_file_id, reply_markup=wait_btn)
+        parts = data.split('_'); file_identifier = parts[1]; ad2_url = parts[2]
+        
+        # Ad 2 Display Logic (URL Button + Timer)
+        wait_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
+        wait_btn.add(
+            telebot.types.InlineKeyboardButton("🔗 Visit Ad Link", url=ad2_url),
+            telebot.types.InlineKeyboardButton("⏳ Ad 2: Wait...", callback_data="ignore")
+        )
+        ad_msg = bot.send_message(user_id, "⚠️ *Step 2:* Visit the second ad link below.", parse_mode="Markdown", reply_markup=wait_btn)
             
-        final_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("✅ Get File", callback_data=f"finaldl_{file_identifier}")]])
+        final_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
+        final_btn.add(telebot.types.InlineKeyboardButton("✅ Get File", callback_data=f"finaldl_{file_identifier}"))
         threading.Thread(target=ad_timer, args=(user_id, ad_msg.message_id, final_btn)).start()
 
     elif data.startswith('finaldl_'):
         deliver_file(user_id, data[8:])
     elif data == 'ignore':
-        bot.answer_callback_query(call.id, text="Please wait...")
+        bot.answer_callback_query(call.id, text="Please wait for the timer to finish...")
 
 def deliver_file(user_id, data):
     try:
@@ -401,7 +408,7 @@ def handle_state(message):
         elif action.startswith('set_ad_'):
             ad_key = action.replace('set_ad_', '')
             if not message.text or not message.text.startswith('http'):
-                bot.reply_to(user_id, "❌ Invalid link! Please send a valid Direct Image URL starting with http/https.")
+                bot.reply_to(user_id, "❌ Invalid link! Please send a valid Adsterra URL starting with http/https.")
                 return
             ads_col.update_one({}, {"$set": {ad_key: message.text.strip()}}); clear_state(user_id)
             bot.reply_to(user_id, f"✅ Ad ({ad_key}) URL Saved Successfully!")
@@ -414,11 +421,10 @@ def copy_html_callback(call):
     state = get_state(call.from_user.id)
     if state and state.get('temp_data', {}).get('html'):
         html_code = state['temp_data']['html']
-        # Send the code in a monospace format so it's easy to copy
         bot.send_message(call.from_user.id, f"👇 *COPY THE HTML CODE BELOW* 👇\n\n```html\n{html_code}\n```", parse_mode="MarkdownV2")
         bot.answer_callback_query(call.id, "Code sent! Copy it from the message above.")
     else:
-        bot.answer_callback_query(call.id, "Error: HTML code not found. Please add movie again.")
+        bot.answer_callback_query(call.id, "Error: HTML code not found.")
 
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)

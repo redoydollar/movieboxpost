@@ -10,7 +10,7 @@ from database import db
 from utils import is_adult
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def get_ad_url(key, default):
     val = db.get_setting(key, default)
@@ -20,13 +20,12 @@ def get_ad_url(key, default):
 bot = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ============= AUTO DELETE FUNCTION =============
-async def delete_message_after_delay(client, chat_id, message_id, delay):
-    """নির্দিষ্ট সময় পর মেসেজ অটো ডিলিট করবে"""
-    await asyncio.sleep(delay)
+async def auto_delete(client, chat_id, message_id):
+    await asyncio.sleep(AUTO_DELETE_SECONDS)
     try:
         await client.delete_messages(chat_id, message_id)
-    except Exception as e:
-        print(f"Delete Error: {e}")
+    except:
+        pass
 
 # ============= TELEGRAM BOT HANDLERS =============
 
@@ -45,9 +44,9 @@ async def start(client, message):
                     caption=f"**🎬 {record['file_name']}**\n\n⏳ এই ফাইলটি ৩০ মিনিট পর অটো ডিলিট হয়ে যাবে!"
                 )
                 # ৩০ মিনিট পর ডিলিট করার জন্য ব্যাকগ্রাউন্ডে টাস্ক শুরু
-                asyncio.create_task(delete_message_after_delay(client, msg.chat.id, msg.id, AUTO_DELETE_SECONDS))
+                asyncio.create_task(auto_delete(client, msg.chat.id, msg.id))
             except Exception as e:
-                print(f"Send Error: {e}")
+                logging.error(f"Send Error: {e}")
             return
             
     await message.reply_text(
@@ -117,9 +116,13 @@ async def auto_index(client, message):
     file_size = message.document.file_size if message.document else message.video.file_size
     
     if db.add_file(file_id, file_unique_id, file_name, file_size, message.caption, message.id, message.chat.id):
-        print(f"✅ Auto-Indexed: {file_name}")
+        logging.info(f"✅ Auto-Indexed: {file_name}")
 
 # ============= FLASK WEB SERVER =============
+
+@app.route('/')
+def home():
+    return "✅ CTG Movie Bot is Running!", 200
 
 @app.route('/verify')
 def verify_page():
@@ -150,17 +153,16 @@ def api_verify():
 
 # ============= MAIN RUNNER =============
 
-def run_bot():
-    """Pyrogram বট আলাদা থ্রেডে চালানোর জন্য"""
-    print("Starting Pyrogram Bot...")
-    bot.run()
-
 if __name__ == '__main__':
-    # Step 1: বটকে ব্যাকগ্রাউন্ড থ্রেডে চালু করা
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
-    # Step 2: Flask ওয়েব সার্ভার মেইন থ্রেডে চালু করা (Render এর জন্য)
+    # Step 1: Flask কে Background Thread এ চালু করা (use_reloader=False দেওয়া জরুরি)
     port = int(os.environ.get('PORT', 5000))
-    print(f"Starting Flask Server on port {port}...")
-    app.run(host='0.0.0.0', port=port)
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False),
+        daemon=True
+    )
+    flask_thread.start()
+    logging.info(f"✅ Flask Server started on port {port}")
+    
+    # Step 2: Pyrogram Bot কে Main Thread এ চালু করা (এটা নিজের event loop তৈরি করে নেবে)
+    logging.info("🚀 Starting Pyrogram Bot...")
+    bot.run()

@@ -145,7 +145,7 @@ def callback_query(call):
         if not is_admin(user_id): return
         mapping = {"admin_set_ad1": "set_ad_normal_ad1", "admin_set_ad2": "set_ad_normal_ad2", "admin_set_aad1": "set_ad_adult_ad1", "admin_set_aad2": "set_ad_adult_ad2"}
         set_state(user_id, mapping[data])
-        bot.send_message(user_id, "🖼 Send the Ad Image:")
+        bot.send_message(user_id, "🔗 Send the Ad Direct Image Link (URL):\n\n_(Example: https://example.com/ad.jpg)_", parse_mode="Markdown")
         
     elif data == "admin_toggle_ads":
         if not is_admin(user_id): return
@@ -223,15 +223,25 @@ def callback_query(call):
         ad2 = ad_config['adult_ad2'] if is_adult else ad_config['normal_ad2']
         if not ad1 or not ad2:
             bot.send_message(user_id, "⚠️ Ads not set. Use /admin"); return
+        
+        # Ad showing logic (Supports both URL and File ID)
         wait_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("⏳ Ad 1: Wait...", callback_data="ignore")]])
-        ad_msg = bot.send_photo(user_id, ad1, reply_markup=wait_btn)
+        try:
+            ad_msg = bot.send_photo(user_id, ad1, reply_markup=wait_btn)
+        except:
+            ad_msg = bot.send_message(user_id, "🔗 Ad 1 Link:\n" + ad1, reply_markup=wait_btn)
+            
         next_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("➡️ Next Ad", callback_data=f"ad2_{file_identifier}_{ad2}")]])
         threading.Thread(target=ad_timer, args=(user_id, ad_msg.message_id, next_btn)).start()
 
     elif data.startswith('ad2_'):
         parts = data.split('_'); file_identifier = parts[1]; ad2_file_id = parts[2]
         wait_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("⏳ Ad 2: Wait...", callback_data="ignore")]])
-        ad_msg = bot.send_photo(user_id, ad2_file_id, reply_markup=wait_btn)
+        try:
+            ad_msg = bot.send_photo(user_id, ad2_file_id, reply_markup=wait_btn)
+        except:
+            ad_msg = bot.send_message(user_id, "🔗 Ad 2 Link:\n" + ad2_file_id, reply_markup=wait_btn)
+            
         final_btn = telebot.types.InlineKeyboardMarkup([[telebot.types.InlineKeyboardButton("✅ Get File", callback_data=f"finaldl_{file_identifier}")]])
         threading.Thread(target=ad_timer, args=(user_id, ad_msg.message_id, final_btn)).start()
 
@@ -293,20 +303,21 @@ def handle_state(message):
             series_col.update_one({"_id": ObjectId(temp['series_id'])}, {"$push": {"episodes": {"ep_num": ep_num, "name": temp['ep_name'], "file_id": file_id}}})
             clear_state(user_id); bot.reply_to(user_id, f"✅ Episode {ep_num} added!")
 
+        # --- AD DIRECT URL LOGIC ---
         elif action.startswith('set_ad_'):
             ad_key = action.replace('set_ad_', '')
-            if not message.photo: return bot.reply_to(user_id, "Send an image.")
-            ads_col.update_one({}, {"$set": {ad_key: message.photo[-1].file_id}}); clear_state(user_id)
-            bot.reply_to(user_id, f"✅ Ad ({ad_key}) Updated!")
+            if not message.text or not message.text.startswith('http'):
+                bot.reply_to(user_id, "❌ Invalid link! Please send a valid Direct Image URL starting with http/https.")
+                return
+            ads_col.update_one({}, {"$set": {ad_key: message.text.strip()}}); clear_state(user_id)
+            bot.reply_to(user_id, f"✅ Ad ({ad_key}) URL Saved Successfully!")
 
     except Exception as e: clear_state(user_id); bot.reply_to(user_id, f"❌ Error: {e}.")
 
 if __name__ == "__main__":
-    # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
     print("🤖 Bot & Flask Server are running...")
-    # Start the Telegram Bot
     bot.infinity_polling()

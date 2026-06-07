@@ -3,6 +3,7 @@ import telebot
 import requests
 import pymongo
 import threading
+import io
 import json
 from datetime import datetime
 from flask import Flask, request
@@ -12,7 +13,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 BLOGGER_URL = os.environ.get("BLOGGER_URL")
-TMDB_KEY = os.environ.get("TMDB_API_KEY") # Add this to Render Environment Variables!
+TMDB_KEY = os.environ.get("TMDB_API_KEY")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -21,7 +22,7 @@ app = Flask(__name__)
 client = pymongo.MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
 db = client["movie_bot_db"]
 settings_col = db["settings"]
-user_workflow = {} # To track multi-step user actions
+user_workflow = {} 
 
 if settings_col.count_documents({}) == 0:
     settings_col.insert_one({
@@ -63,14 +64,15 @@ def generate_premium_html(data):
 
     cast_html = ""
     for c in cast_list[:4]:
-        cast_html += f'<div class="cast-card"><img src="{c["img"]}"/><span>{c["name"]}</span></div>'
+        if c["img"]:
+            cast_html += f'<div class="cast-card"><img src="{c["img"]}"/><span>{c["name"]}</span></div>'
 
     return f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8'/>
-<meta name='viewport' content='width=device-width, initial-scale=1.0'/>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>{title} Download - MOVIE BOX</title>
 <style>
     :root {{ --neon-cyan: #00f3ff; --neon-green: #39ff14; --neon-pink: #ff00ff; --bg-dark: #050505; --card-bg: rgba(10, 10, 10, 0.8); }}
@@ -102,37 +104,37 @@ def generate_premium_html(data):
 </style>
 </head>
 <body>
-<div class='movie-container'>
+<div class="movie-container">
     {f"<img class='backdrop' src='{backdrop}'/>" if backdrop else ""}
-    <div class='poster-wrapper'>
-        <img class='poster' src='{poster}'/>
-        <div class='title-section'>
-            <h2 class='title'>{title}</h2>
-            <div class='tags'>
-                <span class='tag'>⭐ {imdb}</span>
-                <span class='tag'>📅 {year}</span>
-                <span class='tag'>⏱️ {runtime} min</span>
-                <span class='tag'>🎭 {genre.split(",")[0]}</span>
+    <div class="poster-wrapper">
+        <img class="poster" src="{poster}"/>
+        <div class="title-section">
+            <h2 class="title">{title}</h2>
+            <div class="tags">
+                <span class="tag">⭐ {imdb}</span>
+                <span class="tag">📅 {year}</span>
+                <span class="tag">⏱️ {runtime} min</span>
+                <span class="tag">🎭 {genre.split(",")[0]}</span>
             </div>
         </div>
     </div>
     
-    <table class='info-table'>
+    <table class="info-table">
         <tr><td>Language</td><td>{lang}</td></tr>
         <tr><td>Quality</td><td>{quality}</td></tr>
         <tr><td>Genre</td><td>{genre}</td></tr>
     </table>
 
-    <div class='story'><strong>📖 Storyline:</strong><br/>{plot}</div>
+    <div class="story"><strong>📖 Storyline:</strong><br/>{plot}</div>
     
-    {f"<div class='cast-section'><strong>🌟 Cast:</strong><div class='cast-grid'>{cast_html}</div></div>" if cast_list else ""}
+    {"<div class='cast-section'><strong>🌟 Cast:</strong><div class='cast-grid'>" + cast_html + "</div></div>" if cast_html else ""}
     
-    <div class='btn-container'>
-        <a href='{ad_link}' class='neon-btn btn-dl' target='_blank'>⬇️ Download {quality} - {lang}</a>
-        {f"<a href='{trailer}' class='neon-btn btn-trailer' target='_blank'>▶️ Watch Trailer</a>" if trailer != "N/A" else ""}
+    <div class="btn-container">
+        <a href="{ad_link}" class="neon-btn btn-dl" target="_blank">⬇️ Download {quality} - {lang}</a>
+        {f'<a href="{trailer}" class="neon-btn btn-trailer" target="_blank">▶️ Watch Trailer</a>' if trailer != "N/A" else ""}
     </div>
     
-    <div class='footer'>Powered by <a href='{website}'>MOVIE BOX</a></div>
+    <div class="footer">Powered by <a href="{website}">MOVIE BOX</a></div>
 </div>
 </body>
 </html>
@@ -173,26 +175,24 @@ def movie_selected(call):
     movie_id = call.data.split("_")[1]
     bot.answer_callback_query(call.id, "মুভি সিলেক্ট হয়েছে!")
     
-    # Fetch Details
     details = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_KEY}").json()
     credits = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/credits?api_key={TMDB_KEY}").json()
     videos = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_KEY}").json()
     images = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/images?api_key={TMDB_KEY}").json()
     
-    # Process Data
     trailer_key = ""
     for v in videos.get('results', []):
         if v['type'] == 'Trailer' and v['site'] == 'YouTube': trailer_key = v['key']; break
     
     cast_data = []
     for c in credits.get('cast', [])[:4]:
-        cast_data.append({"name": c['name'], "img": f"https://image.tmdb.org/t/p/w200{c['profile_path']}" if c.get('profile_path') else ""})
+        if c.get('profile_path'):
+            cast_data.append({"name": c['name'], "img": f"https://image.tmdb.org/t/p/w200{c['profile_path']}"})
     
     backdrop = ""
     if images.get('backdrops'):
         backdrop = f"https://image.tmdb.org/t/p/w780{images['backdrops'][0]['file_path']}"
 
-    # Save to user workflow
     user_workflow[call.from_user.id] = {
         'title': details.get('title', 'N/A'),
         'year': details.get('release_date', 'N/A')[:4],
@@ -206,7 +206,6 @@ def movie_selected(call):
         'cast': cast_data
     }
     
-    # Ask Language
     markup = telebot.types.InlineKeyboardMarkup(row_width=3)
     markup.add(
         telebot.types.InlineKeyboardButton("🇧🇩 Bangla", callback_data="lang_Bangla"),
@@ -223,7 +222,6 @@ def language_selected(call):
     user_workflow[call.from_user.id]['language'] = lang
     bot.answer_callback_query(call.id, f"{lang} সিলেক্ট হয়েছে!")
     
-    # Ask Quality
     markup = telebot.types.InlineKeyboardMarkup(row_width=3)
     markup.add(
         telebot.types.InlineKeyboardButton("📱 480P", callback_data="qual_480P"),
@@ -240,7 +238,6 @@ def quality_selected(call):
     user_workflow[call.from_user.id]['quality'] = qual
     bot.answer_callback_query(call.id, f"{qual} সিলেক্ট হয়েছে!")
     
-    # Ask Download Link
     msg = bot.send_message(call.message.chat.id, "🔗 ডাউনলোড লিংক দিন:")
     bot.register_next_step_handler(msg, generate_final_post)
 
@@ -252,14 +249,19 @@ def generate_final_post(message):
     # Generate Premium HTML
     html_code = generate_premium_html(data)
     
-    # Send HTML Code with Copy Button
-    markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("📋 Click to Copy Code", copy_text=html_code))
+    # Send HTML Code as .txt file for easy copying on mobile
+    file_name = f"{data['title'].replace(' ', '_')}_code.txt"
+    file_data = io.BytesIO(html_code.encode('utf-8'))
+    file_data.name = file_name
     
-    bot.send_message(message.chat.id, "✅ **Premium Movie Post Generated!**\n\nনিচের বাটনে ক্লিক করে কোড কপি করে Blogger এ paste করুন।", parse_mode="Markdown")
-    bot.send_message(message.chat.id, f"`{html_code[:100]}...`", reply_markup=markup, parse_mode="Markdown") # Shows preview
+    bot.send_document(
+        message.chat.id, 
+        file_data, 
+        caption="✅ **Premium HTML Code Generated!**\n\n📂 ফাইলটি ডাউনলোড করুন -> কোড কপি করুন -> Blogger এ HTML View তে পেস্ট করুন।",
+        parse_mode="Markdown"
+    )
     
-    # Also post a simplified version to Telegram Channel (With Ad Unlock)
+    # Post to Telegram Channel (With Ad Unlock Link)
     channel = get_setting("channel")
     unlock_token = f"MOV_{data['title'].replace(' ', '_')}_{datetime.now().timestamp()}"
     render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
@@ -271,6 +273,7 @@ def generate_final_post(message):
     
     try:
         bot.send_photo(channel, data['poster'], caption=channel_text, reply_markup=markup_ch, parse_mode="Markdown")
+        bot.send_message(message.chat.id, "✅ চ্যানেলে পোস্ট হয়েছে!")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Channel Post Error: {e}")
 

@@ -43,7 +43,6 @@ async def start(client, message):
                     record['user_id'], record['file_id'], 
                     caption=f"**🎬 {record['file_name']}**\n\n⏳ এই ফাইলটি ৩০ মিনিট পর অটো ডিলিট হয়ে যাবে!"
                 )
-                # ৩০ মিনিট পর ডিলিট করার জন্য ব্যাকগ্রাউন্ডে টাস্ক শুরু
                 asyncio.create_task(auto_delete(client, msg.chat.id, msg.id))
             except Exception as e:
                 logging.error(f"Send Error: {e}")
@@ -151,18 +150,21 @@ def api_verify():
     else:
         return jsonify({"status": "error", "message": "আপনি ১০ সেকেন্ড অ্যাড দেখেননি! আবার চেষ্টা করুন।"})
 
-# ============= MAIN RUNNER =============
+# ============= MAIN RUNNER (EVENT LOOP FIX) =============
+
+async def main():
+    logging.info("🚀 Starting Pyrogram Bot...")
+    await bot.start()
+    
+    logging.info("✅ Pyrogram Bot Started. Starting Flask Server...")
+    port = int(os.environ.get('PORT', 5000))
+    
+    # Flask কে ব্যাকগ্রাউন্ডে চালু করা হচ্ছে
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
+    
+    # বটকে চালু রাখার জন্য ইভেন্ট লুপ ব্লক করা হচ্ছে
+    await asyncio.Event().wait()
 
 if __name__ == '__main__':
-    # Step 1: Flask কে Background Thread এ চালু করা (use_reloader=False দেওয়া জরুরি)
-    port = int(os.environ.get('PORT', 5000))
-    flask_thread = threading.Thread(
-        target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False),
-        daemon=True
-    )
-    flask_thread.start()
-    logging.info(f"✅ Flask Server started on port {port}")
-    
-    # Step 2: Pyrogram Bot কে Main Thread এ চালু করা (এটা নিজের event loop তৈরি করে নেবে)
-    logging.info("🚀 Starting Pyrogram Bot...")
-    bot.run()
+    # পাইথনের নতুন ভার্সনে এভাবে লুপ রান করলে এরর আসে না
+    asyncio.run(main())

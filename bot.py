@@ -317,4 +317,11 @@ def generate_series_html(message):
 
 # বট চালু রাখা
 if __name__ == '__main__':
-    bot.infinity_polling()
+    print("🎬 MovieBoxBD Bot চালু হচ্ছে...")
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=1, timeout=60)
+        except Exception as e:
+            print(f"Error: {e}")
+            import time
+            time.sleep(5)

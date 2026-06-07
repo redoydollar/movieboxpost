@@ -136,10 +136,10 @@ def callback_query(call):
         if not is_admin(user_id): return
         series = list(series_col.find({}))
         if not series:
-            bot.send_message(user_id, "❌ কোনো ওয়েব সিরিজ পাওয়া যায়নি। আগে সিরিজ অ্যাড করুন।")
+        bot.send_message(user_id, "❌ কোনো ওয়েব সিরিজ পাওয়া যায়নি। আগে সিরিজ অ্যাড করুন।")
             return
         buttons = [[telebot.types.InlineKeyboardButton(s['title'], callback_data=f"addsep_{s['_id']}")] for s in series]
-        bot.send_message(user_id, "📺 যে সিরিজে এপিসোড যোগ করতে চান সেটি সিলেক্ট করুন:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
+        bot.send_message(user_id, "📺 যে সিরিজে এপিসোড যোগ করতে চান সেটি সিলেক্ট করুন:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons)
     
     elif data.startswith("admin_set_"):
         if not is_admin(user_id): return

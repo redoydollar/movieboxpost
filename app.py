@@ -1,16 +1,18 @@
 import os
-import asyncio
-import threading
+import uvicorn
 import logging
-from flask import Flask, render_template, request, jsonify
+from fastapi import FastAPI, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, JSONResponse
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import *
 from database import db
 from utils import is_adult
 
-# Flask App
-flask_app = Flask(__name__)
+# FastAPI App
+app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def get_ad_url(key, default):
@@ -25,8 +27,8 @@ async def auto_delete(client, chat_id, message_id):
     await asyncio.sleep(AUTO_DELETE_SECONDS)
     try:
         await client.delete_messages(chat_id, message_id)
-    except Exception as e:
-        logging.warning(f"Auto-delete failed: {e}")
+    except:
+        pass
 
 # ============= BOT HANDLERS =============
 
@@ -50,8 +52,7 @@ async def start_handler(client, message):
             return
             
     await message.reply_text(
-        f"**স্বাগতম {message.from_user.first_name}! 🎬**\n\n"
-        "আমি একটি মুভি বট। মুভি খুঁজতে সরাসরি নাম লিখুন।",
+        f"**স্বাগতম {message.from_user.first_name}! 🎬**\n\nআমি একটি মুভি বট। মুভি খুঁজতে সরাসরি নাম লিখুন।",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔍 Search Movie", switch_inline_query_current_chat="")]
         ])
@@ -73,7 +74,7 @@ async def search_handler(client, message):
                             [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)]
                         ])
                     )
-            except Exception:
+            except:
                 pass
 
     query = message.text.strip()
@@ -101,39 +102,32 @@ async def search_handler(client, message):
 
 @bot.on_message(filters.command("stats") & filters.user(OWNER_ID))
 async def stats_handler(client, message):
-    total_users = db.total_users()
-    total_files = db.total_files()
-    await message.reply(f"**📊 Bot Stats:**\n\n👥 Total Users: {total_users}\n📁 Total Files: {total_files}")
+    await message.reply(f"**📊 Bot Stats:**\n\n👥 Total Users: {db.total_users()}\n📁 Total Files: {db.total_files()}")
 
 @bot.on_message(filters.command("set_ad") & filters.user(OWNER_ID))
 async def set_ad_handler(client, message):
     args = message.text.split()
-    if len(args) < 3:
-        return await message.reply("Usage: `/set_ad normal_ad_1 https://link.com`", quote=True)
+    if len(args) < 3: return await message.reply("Usage: `/set_ad normal_ad_1 https://link.com`", quote=True)
     db.set_setting(args[1], args[2])
     await message.reply(f"✅ Ad updated for `{args[1]}`")
 
 @bot.on_message(filters.command("ban") & filters.user(OWNER_ID))
 async def ban_handler(client, message):
     args = message.text.split()
-    if len(args) < 2:
-        return await message.reply("Usage: `/ban user_id`", quote=True)
+    if len(args) < 2: return await message.reply("Usage: `/ban user_id`", quote=True)
     try:
         db.ban_user(int(args[1]))
         await message.reply(f"✅ User `{args[1]}` banned.")
-    except ValueError:
-        await message.reply("❌ Invalid user ID.")
+    except: await message.reply("❌ Invalid user ID.")
 
 @bot.on_message(filters.command("unban") & filters.user(OWNER_ID))
 async def unban_handler(client, message):
     args = message.text.split()
-    if len(args) < 2:
-        return await message.reply("Usage: `/unban user_id`", quote=True)
+    if len(args) < 2: return await message.reply("Usage: `/unban user_id`", quote=True)
     try:
         db.unban_user(int(args[1]))
         await message.reply(f"✅ User `{args[1]}` unbanned.")
-    except ValueError:
-        await message.reply("❌ Invalid user ID.")
+    except: await message.reply("❌ Invalid user ID.")
 
 @bot.on_message(filters.chat(INDEX_CHANNELS) & (filters.document | filters.video))
 async def auto_index_handler(client, message):
@@ -153,63 +147,54 @@ async def auto_index_handler(client, message):
     if db.add_file(file_id, file_unique_id, file_name, file_size, message.caption, message.id, message.chat.id):
         logging.info(f"✅ Auto-Indexed: {file_name}")
 
-# ============= FLASK ROUTES =============
+# ============= FASTAPI ROUTES =============
 
-@flask_app.route('/')
-def home():
-    return "✅ CTG Movie Bot is Running!", 200
+@app.get("/")
+async def home():
+    return {"status": "Bot is running!"}
 
-@flask_app.route('/verify')
-def verify_page():
-    token = request.args.get('token')
-    ad_type = request.args.get('type', 'normal')
+@app.get("/verify", response_class=HTMLResponse)
+async def verify_page(request: Request, token: str, type: str = "normal"):
     if not token:
         return "Invalid Link!", 404
-
-    if ad_type == "adult":
+    
+    if type == "adult":
         ad1 = get_ad_url("adult_ad_1", ADULT_AD_1)
         ad2 = get_ad_url("adult_ad_2", ADULT_AD_2)
     else:
         ad1 = get_ad_url("normal_ad_1", NORMAL_AD_1)
         ad2 = get_ad_url("normal_ad_2", NORMAL_AD_2)
 
-    return render_template('verify.html', token=token, ad1=ad1, ad2=ad2, bot_username=BOT_USERNAME)
+    return templates.TemplateResponse("verify.html", {"request": request, "token": token, "ad1": ad1, "ad2": ad2, "bot_username": BOT_USERNAME})
 
-@flask_app.route('/api/verify', methods=['POST'])
-def api_verify():
-    data = request.json
+@app.post("/api/verify")
+async def api_verify(request: Request):
+    data = await request.json()
     token = data.get('token')
     if not token:
-        return jsonify({"status": "error", "message": "Token missing"}), 400
-
+        return JSONResponse({"status": "error", "message": "Token missing"}, status_code=400)
+    
     record = db.verify_token(token)
     if record:
-        return jsonify({"status": "success", "bot_username": BOT_USERNAME, "token": token})
+        return {"status": "success", "bot_username": BOT_USERNAME, "token": token}
     else:
-        return jsonify({"status": "error", "message": "ভেরিফিকেশন ব্যর্থ! আবার চেষ্টা করুন।"})
+        return JSONResponse({"status": "error", "message": "ভেরিফিকেশন ব্যর্থ! আবার চেষ্টা করুন।"}, status_code=403)
+
+# ============= FASTAPI + PYROGRAM STARTUP =============
+
+@app.on_event("startup")
+async def startup_event():
+    """FastAPI চালু হওয়ার সাথে সাথেই বট চালু হবে"""
+    await bot.start()
+    logging.info("🚀 Pyrogram Bot Started Successfully!")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """সার্ভার বন্ধ হলে বটও বন্ধ হবে"""
+    await bot.stop()
 
 # ============= MAIN ENTRY POINT =============
-# এই লজিকটা একদম নতুন: Flask মেইন থ্রেডে, Bot ব্যাকগ্রাউন্ডে
-
-def run_bot_thread():
-    """Pyrogram Bot কে আলাদা থ্রেডে নিজস্ব Event Loop নিয়ে চালানো"""
-    bot_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(bot_loop)
-    
-    try:
-        bot_loop.run_until_complete(bot.start())
-        logging.info("🚀 Pyrogram Bot Started Successfully!")
-        bot_loop.run_forever()
-    except Exception as e:
-        logging.error(f"Bot Error: {e}")
 
 if __name__ == '__main__':
-    # Step 1: Bot কে Background Thread এ চালু করো
-    bot_thread = threading.Thread(target=run_bot_thread, daemon=True)
-    bot_thread.start()
-    logging.info("⏳ Bot thread started, waiting for connection...")
-    
-    # Step 2: Flask কে Main Thread এ চালু করো (Render এর রুল)
     port = int(os.environ.get('PORT', 5000))
-    logging.info(f"✅ Starting Flask Server on port {port}...")
-    flask_app.run(host='0.0.0.0', port=port, use_reloader=False)
+    uvicorn.run(app, host='0.0.0.0', port=port)

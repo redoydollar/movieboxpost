@@ -6,7 +6,7 @@ from bson.objectid import ObjectId
 from dotenv import load_dotenv
 import telebot
 from flask import Flask
-from database import movies_col, series_col, ads_col, admins_col, states_col
+from database import movies_col, series_col, ads_col, admins_col
 
 load_dotenv()
 
@@ -97,16 +97,7 @@ def is_admin(user_id):
     if user_id == OWNER_ID: return True
     return admins_col.find_one({"user_id": user_id}) is not None
 
-def get_state(user_id):
-    return states_col.find_one({"user_id": user_id})
-
-def set_state(user_id, action, temp_data=None):
-    states_col.update_one({"user_id": user_id}, {"$set": {"action": action, "temp_data": temp_data or {}}}, upsert=True)
-
-def clear_state(user_id):
-    states_col.delete_one({"user_id": user_id})
-
-# --- Unskippable Ad Timer Logic ---
+# --- Ad Timer Logic ---
 def ad_timer(chat_id, msg_id, next_markup):
     ad_config = ads_col.find_one({})
     duration = ad_config.get("ad_duration", 5) if ad_config else 5
@@ -115,7 +106,7 @@ def ad_timer(chat_id, msg_id, next_markup):
     except: pass
 
 # ==========================================
-# COMMAND HANDLERS
+# BASIC COMMANDS
 # ==========================================
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -135,51 +126,9 @@ def start(message):
         except: pass
     bot.reply_to(message, "🎬 Welcome to *MOVIE BOX BD*!\n\nSend a movie or series name to search.", parse_mode="Markdown")
 
-@bot.message_handler(commands=['addmovie'])
-def cmd_add_movie(message):
-    if not is_admin(message.from_user.id): return
-    set_state(message.from_user.id, "wait_tmdb_query")
-    bot.reply_to(message, "🎬 Send Movie Name to search in TMDB:")
-
-@bot.message_handler(commands=['addseries'])
-def cmd_add_series(message):
-    if not is_admin(message.from_user.id): return
-    set_state(message.from_user.id, "wait_tmdb_tv_query")
-    bot.reply_to(message, "📺 Send Web Series Name to search in TMDB:")
-
-@bot.message_handler(commands=['addepisode'])
-def cmd_add_episode(message):
-    if not is_admin(message.from_user.id): return
-    series = list(series_col.find({}))
-    if not series:
-        bot.reply_to(message, "❌ No series found. Add a series first with /addseries")
-        return
-    buttons = [[telebot.types.InlineKeyboardButton(s['title'], callback_data=f"addsep_{s['_id']}")] for s in series]
-    bot.reply_to(message, "📺 Select a series to add episode:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
-
-@bot.message_handler(commands=['setad1'])
-def cmd_set_ad1(message):
-    if not is_admin(message.from_user.id): return
-    set_state(message.from_user.id, "set_ad_normal_ad1")
-    bot.reply_to(message, "🔗 Send the Adsterra Direct URL Link for Normal Ad 1:")
-
-@bot.message_handler(commands=['setad2'])
-def cmd_set_ad2(message):
-    if not is_admin(message.from_user.id): return
-    set_state(message.from_user.id, "set_ad_normal_ad2")
-    bot.reply_to(message, "🔗 Send the Adsterra Direct URL Link for Normal Ad 2:")
-
-@bot.message_handler(commands=['setadultad1'])
-def cmd_set_aad1(message):
-    if not is_admin(message.from_user.id): return
-    set_state(message.from_user.id, "set_ad_adult_ad1")
-    bot.reply_to(message, "🔞 Send the Adsterra Direct URL Link for 18+ Ad 1:")
-
-@bot.message_handler(commands=['setadultad2'])
-def cmd_set_aad2(message):
-    if not is_admin(message.from_user.id): return
-    set_state(message.from_user.id, "set_ad_adult_ad2")
-    bot.reply_to(message, "🔞 Send the Adsterra Direct URL Link for 18+ Ad 2:")
+@bot.message_handler(commands=['cancel'])
+def cancel_cmd(message):
+    bot.reply_to(message, "✅ Process cancelled. You can now search normally.")
 
 @bot.message_handler(commands=['toggleads'])
 def cmd_toggle_ads(message):
@@ -191,89 +140,98 @@ def cmd_toggle_ads(message):
     bot.reply_to(message, f"⚙️ Ads System is now {status_text}")
 
 # ==========================================
-# STATE HANDLER (MUST BE BEFORE SEARCH)
+# ADMIN ADD MOVIE FLOW
 # ==========================================
-@bot.message_handler(func=lambda m: get_state(m.from_user.id) is not None, content_types=['text', 'photo', 'document', 'video'])
-def handle_state(message):
-    user_id = message.from_user.id
-    state = get_state(user_id)
-    action = state['action']
-    temp = state.get('temp_data', {})
-    
-    try:
-        if action == 'wait_tmdb_query':
-            results = search_tmdb_movie(message.text)
-            if not results: bot.reply_to(user_id, "❌ Not found on TMDB. Send another name:"); return
-            markup = telebot.types.InlineKeyboardMarkup()
-            for r in results: markup.add(telebot.types.InlineKeyboardButton(f"{r.get('title', 'N/A')} ({r.get('release_date', '')[:4]})", callback_data=f"tmdb_{r['id']}"))
-            bot.send_message(user_id, "Select a movie:", reply_markup=markup)
-            clear_state(user_id)
+@bot.message_handler(commands=['addmovie'])
+def cmd_add_movie(message):
+    if not is_admin(message.from_user.id): return
+    msg = bot.reply_to(message, "🎬 Send Movie Name to search in TMDB:")
+    bot.register_next_step_handler(msg, process_movie_name)
 
-        elif action == 'wait_tmdb_tv_query':
-            results = search_tmdb_tv(message.text)
-            if not results: bot.reply_to(user_id, "❌ Not found on TMDB. Send another name:"); return
-            markup = telebot.types.InlineKeyboardMarkup()
-            for r in results: markup.add(telebot.types.InlineKeyboardButton(f"{r.get('name', 'N/A')} ({r.get('first_air_date', '')[:4]})", callback_data=f"tmdbtv_{r['id']}"))
-            bot.send_message(user_id, "Select a series:", reply_markup=markup)
-            clear_state(user_id)
+def process_movie_name(message):
+    if message.text.startswith('/'): return cancel_cmd(message)
+    results = search_tmdb_movie(message.text)
+    if not results:
+        msg = bot.reply_to(message, "❌ Not found on TMDB. Send another name or /cancel:")
+        bot.register_next_step_handler(msg, process_movie_name)
+        return
+    markup = telebot.types.InlineKeyboardMarkup()
+    for r in results: markup.add(telebot.types.InlineKeyboardButton(f"{r.get('title', 'N/A')} ({r.get('release_date', '')[:4]})", callback_data=f"tmdb_{r['id']}"))
+    bot.send_message(message.from_user.id, "Select a movie:", reply_markup=markup)
 
-        elif action == 'add_mov_ss':
-            sids = []; 
-            if message.photo: sids = [p.file_id for p in message.photo]
-            temp['screenshots'] = sids; set_state(user_id, 'add_mov_file', temp)
-            bot.reply_to(user_id, "📁 Send Movie File (Document/Video):")
-            
-        elif action == 'add_mov_file':
-            if not message.document and not message.video: return bot.reply_to(user_id, "Send a file.")
-            temp['movie_file_id'] = message.document.file_id if message.document else message.video.file_id
-            
-            inserted_movie = movies_col.insert_one({
-                "title": temp['title'], "poster_file_id": temp.get('poster_file_id', ''), 
-                "screenshots": temp.get('screenshots', []), "movie_file_id": temp['movie_file_id'], 
-                "description": temp.get('description', ''), "rating": temp.get('rating', 'N/A'), 
-                "is_adult": False
-            })
-            
-            html_code = generate_blogger_html(temp, inserted_movie.inserted_id)
-            markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("📋 Copy Blogger HTML", callback_data=f"copy_html"))
-            
-            bot.reply_to(user_id, "✅ Movie Added Successfully!")
-            bot.send_message(user_id, "🔥 *Blogger HTML Code Generated!*\n\nClick the button below to copy.", parse_mode="Markdown", reply_markup=markup)
-            set_state(user_id, 'html_generated', {'html': html_code})
+# ==========================================
+# ADMIN ADD SERIES FLOW
+# ==========================================
+@bot.message_handler(commands=['addseries'])
+def cmd_add_series(message):
+    if not is_admin(message.from_user.id): return
+    msg = bot.reply_to(message, "📺 Send Web Series Name to search in TMDB:")
+    bot.register_next_step_handler(msg, process_series_name)
 
-        elif action == 'add_ep_name':
-            temp['ep_name'] = message.text; set_state(user_id, 'add_ep_file', temp)
-            bot.reply_to(user_id, "📁 Send Episode File (Document/Video):")
-            
-        elif action == 'add_ep_file':
-            if not message.document and not message.video: return bot.reply_to(user_id, "Send a file.")
-            file_id = message.document.file_id if message.document else message.video.file_id
-            series = series_col.find_one({"_id": ObjectId(temp['series_id'])})
-            ep_num = len(series['episodes']) + 1
-            series_col.update_one({"_id": ObjectId(temp['series_id'])}, {"$push": {"episodes": {"ep_num": ep_num, "name": temp['ep_name'], "file_id": file_id}}})
-            clear_state(user_id)
-            bot.reply_to(user_id, f"✅ Episode {ep_num} added!")
+def process_series_name(message):
+    if message.text.startswith('/'): return cancel_cmd(message)
+    results = search_tmdb_tv(message.text)
+    if not results:
+        msg = bot.reply_to(message, "❌ Not found on TMDB. Send another name or /cancel:")
+        bot.register_next_step_handler(msg, process_series_name)
+        return
+    markup = telebot.types.InlineKeyboardMarkup()
+    for r in results: markup.add(telebot.types.InlineKeyboardButton(f"{r.get('name', 'N/A')} ({r.get('first_air_date', '')[:4]})", callback_data=f"tmdbtv_{r['id']}"))
+    bot.send_message(message.from_user.id, "Select a series:", reply_markup=markup)
 
-        elif action.startswith('set_ad_'):
-            ad_key = action.replace('set_ad_', '')
-            if not message.text or not message.text.startswith('http'):
-                bot.reply_to(user_id, "❌ Invalid link! Send a valid URL starting with http/https.")
-                return
-            ads_col.update_one({}, {"$set": {ad_key: message.text.strip()}})
-            clear_state(user_id)
-            bot.reply_to(user_id, f"✅ Ad URL Saved Successfully!")
+# ==========================================
+# ADMIN ADD EPISODE FLOW
+# ==========================================
+@bot.message_handler(commands=['addepisode'])
+def cmd_add_episode(message):
+    if not is_admin(message.from_user.id): return
+    series = list(series_col.find({}))
+    if not series:
+        bot.reply_to(message, "❌ No series found. Add a series first with /addseries")
+        return
+    buttons = [[telebot.types.InlineKeyboardButton(s['title'], callback_data=f"addsep_{s['_id']}")] for s in series]
+    bot.reply_to(message, "📺 Select a series to add episode:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
 
-    except Exception as e: 
-        clear_state(user_id)
-        bot.reply_to(user_id, f"❌ Error: {e}")
+# ==========================================
+# ADMIN SET AD LINKS FLOW
+# ==========================================
+@bot.message_handler(commands=['setad1'])
+def cmd_set_ad1(message):
+    if not is_admin(message.from_user.id): return
+    msg = bot.reply_to(message, "🔗 Send Adsterra Direct URL Link for Normal Ad 1:")
+    bot.register_next_step_handler(msg, lambda m: save_ad_url(m, 'normal_ad1'))
+
+@bot.message_handler(commands=['setad2'])
+def cmd_set_ad2(message):
+    if not is_admin(message.from_user.id): return
+    msg = bot.reply_to(message, "🔗 Send Adsterra Direct URL Link for Normal Ad 2:")
+    bot.register_next_step_handler(msg, lambda m: save_ad_url(m, 'normal_ad2'))
+
+@bot.message_handler(commands=['setadultad1'])
+def cmd_set_aad1(message):
+    if not is_admin(message.from_user.id): return
+    msg = bot.reply_to(message, "🔞 Send Adsterra Direct URL Link for 18+ Ad 1:")
+    bot.register_next_step_handler(msg, lambda m: save_ad_url(m, 'adult_ad1'))
+
+@bot.message_handler(commands=['setadultad2'])
+def cmd_set_aad2(message):
+    if not is_admin(message.from_user.id): return
+    msg = bot.reply_to(message, "🔞 Send Adsterra Direct URL Link for 18+ Ad 2:")
+    bot.register_next_step_handler(msg, lambda m: save_ad_url(m, 'adult_ad2'))
+
+def save_ad_url(message, ad_key):
+    if message.text.startswith('/'): return cancel_cmd(message)
+    if not message.text or not message.text.startswith('http'):
+        bot.reply_to(message, "❌ Invalid link! Must start with http/https. Process cancelled.")
+        return
+    ads_col.update_one({}, {"$set": {ad_key: message.text.strip()}})
+    bot.reply_to(message, f"✅ Ad ({ad_key}) URL Saved Successfully!")
 
 # ==========================================
 # USER SEARCH HANDLER
 # ==========================================
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith('/'))
 def search_content(message):
-    user_id = message.from_user.id
     query = message.text
     movies = list(movies_col.find({"title": {"$regex": query, "$options": "i"}}).limit(5))
     series = list(series_col.find({"title": {"$regex": query, "$options": "i"}}).limit(5))
@@ -285,27 +243,26 @@ def search_content(message):
     if not buttons:
         bot.reply_to(message, "❌ No results found.")
         return
-        
-    bot.send_message(user_id, "🔍 Search Results:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
+    bot.send_message(message.from_user.id, "🔍 Search Results:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
 
 # ==========================================
-# CALLBACK HANDLERS
+# ALL CALLBACK HANDLERS
 # ==========================================
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     user_id = call.from_user.id
     data = call.data
 
-    # --- ADMIN TMDB SEARCH CALLBACK ---
+    # --- ADMIN TMDB MOVIE SELECTION CALLBACK ---
     if data.startswith("tmdb_"):
         tmdb_id = data.split('_')[1]
         details = get_tmdb_movie_details(tmdb_id)
         if not details.get('id'): bot.answer_callback_query(call.id, "❌ Error fetching."); return
             
         genres = ", ".join([g['name'] for g in details.get('genres', [])])
-        temp_data = {
+        movie_data = {
             "title": details.get('title', 'Unknown'), 
-            "description": details.get('overview', 'No description.'), 
+            "description": details.get('overview', ''), 
             "rating": details.get('vote_average', 0),
             "release_date": details.get('release_date', 'N/A'),
             "genres": genres,
@@ -315,33 +272,36 @@ def callback_query(call):
         
         if details.get('poster_path'):
             poster_url = f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}"
-            msg = bot.send_photo(user_id, poster_url, caption=f"🎬 Selected: *{temp_data['title']}*\n\nNow send Screenshots or type `skip`:", parse_mode="Markdown")
-            temp_data['poster_file_id'] = msg.photo[-1].file_id
+            msg = bot.send_photo(user_id, poster_url, caption=f"🎬 Selected: *{movie_data['title']}*\n\nNow send Screenshots or type `skip`:", parse_mode="Markdown")
+            movie_data['poster_file_id'] = msg.photo[-1].file_id
         else:
-            bot.send_message(user_id, "Send Poster Image manually:")
-            temp_data['poster_file_id'] = ""
-        set_state(user_id, "add_mov_ss", temp_data)
+            msg = bot.send_message(user_id, "Send Poster Image manually:")
+            bot.register_next_step_handler(msg, process_manual_poster, movie_data)
+            return
 
+        bot.register_next_step_handler(msg, process_screenshots, movie_data)
+
+    # --- ADMIN TMDB TV SELECTION CALLBACK ---
     elif data.startswith("tmdbtv_"):
         tv_id = data.split('_')[1]
         details = get_tmdb_tv_details(tv_id)
         if not details.get('id'): bot.answer_callback_query(call.id, "❌ Error fetching."); return
             
-        temp_data = {"title": details.get('name', 'Unknown'), "description": details.get('overview', 'No description.')}
+        series_data = {"title": details.get('name', 'Unknown'), "description": details.get('overview', '')}
         if details.get('poster_path'):
             poster_url = f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}"
-            msg = bot.send_photo(user_id, poster_url, caption=f"📺 Selected: *{temp_data['title']}*\n\nSeries saved! Use /addepisode.", parse_mode="Markdown")
-            temp_data['poster_file_id'] = msg.photo[-1].file_id
-        else: temp_data['poster_file_id'] = ""
-        series_col.insert_one({"title": temp_data['title'], "poster_file_id": temp_data['poster_file_id'], "description": temp_data['description'], "episodes": [], "is_adult": False})
-        clear_state(user_id)
+            msg = bot.send_photo(user_id, poster_url, caption=f"📺 Selected: *{series_data['title']}*\n\nSeries saved! Use /addepisode.", parse_mode="Markdown")
+            series_data['poster_file_id'] = msg.photo[-1].file_id
+        else: series_data['poster_file_id'] = ""
+        series_col.insert_one({"title": series_data['title'], "poster_file_id": series_data['poster_file_id'], "description": series_data['description'], "episodes": [], "is_adult": False})
 
+    # --- ADMIN EPISODE SELECTION CALLBACK ---
     elif data.startswith("addsep_"):
         ser_id = data.split('_')[1]
-        set_state(user_id, "add_ep_name", {"series_id": ser_id})
-        bot.send_message(user_id, "📝 Send Episode Name (e.g. Episode 5):")
+        msg = bot.send_message(user_id, "📝 Send Episode Name (e.g. Episode 5):")
+        bot.register_next_step_handler(msg, process_ep_name, ser_id)
 
-    # --- USER CALLBACKS ---
+    # --- USER MOVIE VIEW CALLBACK ---
     elif data.startswith('mov_'):
         movie = movies_col.find_one({"_id": ObjectId(data.split('_')[1])})
         if not movie: return
@@ -352,6 +312,7 @@ def callback_query(call):
             bot.send_media_group(user_id, media)
         bot.send_photo(user_id, movie['poster_file_id'], caption=caption, parse_mode="Markdown", reply_markup=buttons)
 
+    # --- USER SERIES VIEW CALLBACK ---
     elif data.startswith('ser_'):
         series = series_col.find_one({"_id": ObjectId(data.split('_')[1])})
         if not series: return
@@ -360,6 +321,7 @@ def callback_query(call):
         for ep in series.get('episodes', []): buttons.append([telebot.types.InlineKeyboardButton(f"Episode {ep['ep_num']} - {ep['name']}", callback_data=f"dl_ep_{series['_id']}_{ep['ep_num']}")])
         bot.send_photo(user_id, series['poster_file_id'], caption=caption, parse_mode="Markdown", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
 
+    # --- USER DOWNLOAD FLOW CALLBACK ---
     elif data.startswith('dl_mov_') or data.startswith('dl_ep_'):
         ad_config = ads_col.find_one({})
         if not ad_config or not ad_config.get("ads_enabled"):
@@ -377,7 +339,7 @@ def callback_query(call):
         ad2 = ad_config['adult_ad2'] if is_adult else ad_config['normal_ad2']
         
         if not ad1 or not ad2:
-            bot.send_message(user_id, "⚠️ Ads not configured yet."); return
+            bot.send_message(user_id, "⚠️ Ads not configured by admin."); return
         
         wait_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
         wait_btn.add(
@@ -420,14 +382,64 @@ def callback_query(call):
     elif data == 'ignore':
         bot.answer_callback_query(call.id, text="Please wait...")
 
-    elif data == "copy_html":
-        state = get_state(user_id)
-        if state and state.get('temp_data', {}).get('html'):
-            html_code = state['temp_data']['html']
-            bot.send_message(user_id, f"👇 COPY HTML CODE BELOW 👇\n\n{html_code}")
-            bot.answer_callback_query(call.id, "Code sent!")
-        else:
-            bot.answer_callback_query(call.id, "Error: Code expired.")
+# ==========================================
+# STEP BY STEP PROCESSING FUNCTIONS
+# ==========================================
+def process_manual_poster(message, movie_data):
+    if message.text and message.text.startswith('/'): return cancel_cmd(message)
+    if not message.photo:
+        bot.reply_to(message, "❌ Must be an image. Send again:")
+        bot.register_next_step_handler(message, process_manual_poster, movie_data)
+        return
+    movie_data['poster_file_id'] = message.photo[-1].file_id
+    msg = bot.reply_to(message, "✅ Poster saved. Now send Screenshots or type `skip`:")
+    bot.register_next_step_handler(msg, process_screenshots, movie_data)
+
+def process_screenshots(message, movie_data):
+    if message.text and message.text.startswith('/'): return cancel_cmd(message)
+    sids = []
+    if message.photo: sids = [p.file_id for p in message.photo]
+    movie_data['screenshots'] = sids
+    msg = bot.reply_to(message, "📁 Send Movie File (Document/Video):")
+    bot.register_next_step_handler(msg, process_movie_file, movie_data)
+
+def process_movie_file(message, movie_data):
+    if message.text and message.text.startswith('/'): return cancel_cmd(message)
+    if not message.document and not message.video:
+        bot.reply_to(message, "❌ Must be a file. Send again:")
+        bot.register_next_step_handler(message, process_movie_file, movie_data)
+        return
+        
+    movie_data['movie_file_id'] = message.document.file_id if message.document else message.video.file_id
+    
+    inserted_movie = movies_col.insert_one({
+        "title": movie_data['title'], "poster_file_id": movie_data.get('poster_file_id', ''), 
+        "screenshots": movie_data.get('screenshots', []), "movie_file_id": movie_data['movie_file_id'], 
+        "description": movie_data.get('description', ''), "rating": movie_data.get('rating', 'N/A'), 
+        "is_adult": False
+    })
+    
+    html_code = generate_blogger_html(movie_data, inserted_movie.inserted_id)
+    bot.reply_to(message, "✅ Movie Added Successfully!\n\n👇 COPY BLOGGER HTML BELOW 👇\n\n" + html_code)
+
+def process_ep_name(message, ser_id):
+    if message.text.startswith('/'): return cancel_cmd(message)
+    ep_name = message.text
+    msg = bot.reply_to(message, "📁 Send Episode File (Document/Video):")
+    bot.register_next_step_handler(msg, process_ep_file, ser_id, ep_name)
+
+def process_ep_file(message, ser_id, ep_name):
+    if message.text and message.text.startswith('/'): return cancel_cmd(message)
+    if not message.document and not message.video:
+        bot.reply_to(message, "❌ Must be a file. Send again:")
+        bot.register_next_step_handler(message, process_ep_file, ser_id, ep_name)
+        return
+        
+    file_id = message.document.file_id if message.document else message.video.file_id
+    series = series_col.find_one({"_id": ObjectId(ser_id)})
+    ep_num = len(series['episodes']) + 1
+    series_col.update_one({"_id": ObjectId(ser_id)}, {"$push": {"episodes": {"ep_num": ep_num, "name": ep_name, "file_id": file_id}}})
+    bot.reply_to(message, f"✅ Episode {ep_num} added to {series['title']}!")
 
 def deliver_file(user_id, data):
     try:

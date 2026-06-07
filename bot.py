@@ -2,6 +2,8 @@ import os
 import telebot
 import requests
 from pymongo import MongoClient
+from flask import Flask
+import threading
 
 # Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -13,6 +15,18 @@ client = MongoClient(MONGO_URI)
 db = client["movieboxbd_db"]
 states_collection = db["user_states"]
 
+# ============ FLASK APP (Render Port এর জন্য) ============
+app_web = Flask(__name__)
+
+@app_web.route('/')
+def home():
+    return "MovieBoxBD Bot is Running Successfully!"
+
+def run_flask():
+    port = int(os.environ.get('PORT', 5000))
+    app_web.run(host='0.0.0.0', port=port)
+
+# ============ ডেটাবেস ফাংশন ============
 def set_state(user_id, step, data=None):
     if data is None: data = {}
     states_collection.update_one(
@@ -31,7 +45,7 @@ def search_tmdb(query, content_type='movie'):
     except: pass
     return None
 
-# ============ পেজের মূল টেমপ্লেট (ভেরিফিকেশন + ২ অ্যাড + JS সহ) ============
+# ============ পেজের মূল টেমপ্লেট ============
 def get_full_html(content_html):
     return """<!DOCTYPE html>
 <html lang="bn">
@@ -66,8 +80,6 @@ def get_full_html(content_html):
         .download-section::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #e50914, #ff6b35, #e50914); }
         .download-btn { background: linear-gradient(135deg, #e50914, #ff3030); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.3s; font-family: 'Hind Siliguri', sans-serif; width: 100%; box-shadow: 0 4px 15px rgba(229,9,20,0.3); }
         .download-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(229,9,20,0.5); }
-        
-        /* Episode CSS */
         .episode-section { margin-top: 40px; background: linear-gradient(145deg, #12121c, #1a1a2e); border-radius: 16px; padding: 28px; border: 1px solid rgba(229,9,20,0.1); }
         .episode-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
         .episode-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; overflow: hidden; transition: all 0.3s; }
@@ -82,8 +94,6 @@ def get_full_html(content_html):
         .ep-downloads { display: flex; gap: 8px; flex-shrink: 0; }
         .ep-dl-btn { background: linear-gradient(135deg, #e50914, #ff3030); border: none; color: #fff; padding: 10px 22px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.3s; font-family: 'Hind Siliguri', sans-serif; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(229,9,20,0.2); }
         .ep-dl-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(229,9,20,0.4); }
-
-        /* Verification Modal CSS */
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.88); backdrop-filter: blur(8px); z-index: 9999; align-items: center; justify-content: center; padding: 20px; }
         .modal-overlay.active { display: flex; }
         .modal-box { background: linear-gradient(145deg, #15151f, #1e1e32); border-radius: 20px; width: 100%; max-width: 480px; border: 1px solid rgba(229,9,20,0.15); overflow: hidden; }
@@ -114,17 +124,14 @@ def get_full_html(content_html):
         .success-state h3 { font-size: 18px; color: #fff; margin-bottom: 18px; }
         .final-download-btn { display: inline-flex; align-items: center; gap: 8px; padding: 13px 36px; background: linear-gradient(135deg, #e50914, #ff3030); color: #fff; text-decoration: none; border-radius: 12px; font-size: 15px; font-weight: 700; font-family: 'Hind Siliguri', sans-serif; box-shadow: 0 4px 20px rgba(229,9,20,0.4); }
         .final-download-btn:hover { transform: translateY(-2px); }
-        
         @media (max-width: 768px) { .movie-hero { grid-template-columns: 1fr; } .poster-wrap { max-width: 200px; margin: 0 auto; } .screenshots-grid { grid-template-columns: 1fr; } .episode-card-inner { flex-wrap: wrap; } .ep-downloads { width: 100%; } .ep-dl-btn { flex: 1; justify-content: center; } }
     </style>
 </head>
 <body>
-
 <div class="movie-container">
     """ + content_html + """
 </div>
 
-<!-- ============ VERIFICATION MODAL (2 Ads + 2 Steps) ============ -->
 <div class="modal-overlay" id="verificationModal">
     <div class="modal-box">
         <div class="modal-header">
@@ -140,39 +147,28 @@ def get_full_html(content_html):
                 <div class="step-dot" id="step3Dot"><i class="fas fa-check" style="font-size:11px"></i></div>
             </div>
             <div id="stepContent">
-                <!-- STEP 1 -->
                 <div id="step1Content">
                     <div class="verification-message"><h4>ধাপ ১: ভেরিফিকেশন</h4><p>অনুগ্রহ করে ৫ সেকেন্ড অপেক্ষা করুন</p></div>
-                    
-                    <!-- ========== AD 1 START ========== -->
                     <div class="ad-container" id="adContainer1">
                         <!-- তোমার প্রথম অ্যাড কোড এখানে বসাও -->
                     </div>
-                    <!-- ========== AD 1 END ========== -->
-                    
                     <div class="timer-section" id="timer1Section">
                         <div class="timer-bar"><div class="timer-fill" id="timer1Fill"></div></div>
                         <p class="timer-text">অপেক্ষা করুন... <span id="timer1Count">5</span> সেকেন্ড</p>
                     </div>
                     <button class="unlock-btn" id="step1Unlock" onclick="goToStep2()"><i class="fas fa-arrow-right"></i> পরবর্তী ধাপে যান</button>
                 </div>
-                <!-- STEP 2 -->
                 <div id="step2Content" style="display:none">
                     <div class="verification-message"><h4>ধাপ ২: চূড়ান্ত ভেরিফিকেশন</h4><p>আরো ৫ সেকেন্ড অপেক্ষা করুন</p></div>
-                    
-                    <!-- ========== AD 2 START ========== -->
                     <div class="ad-container" id="adContainer2">
                         <!-- তোমার দ্বিতীয় অ্যাড কোড এখানে বসাও -->
                     </div>
-                    <!-- ========== AD 2 END ========== -->
-                    
                     <div class="timer-section" id="timer2Section">
                         <div class="timer-bar"><div class="timer-fill" id="timer2Fill"></div></div>
                         <p class="timer-text">অপেক্ষা করুন... <span id="timer2Count">5</span> সেকেন্ড</p>
                     </div>
                     <button class="unlock-btn" id="step2Unlock" onclick="goToStep3()"><i class="fas fa-unlock"></i> ডাউনলোড আনলক করুন</button>
                 </div>
-                <!-- STEP 3 -->
                 <div id="step3Content" style="display:none">
                     <div class="success-state">
                         <div class="success-icon"><i class="fas fa-check"></i></div>
@@ -205,7 +201,6 @@ def get_full_html(content_html):
 def start(message):
     bot.reply_to(message, "🎬 MovieBoxBD Bot এ স্বাগতম!\n\nমুভি পোস্ট করতে `/movie` লিখুন\nওয়েব সিরিজ/এপিসোড পোস্ট করতে `/series` লিখুন।")
 
-# ============ মুভি মোড ============
 @bot.message_handler(commands=['movie'])
 def movie_mode(message):
     msg = bot.reply_to(message, "🎬 মুভির নাম লিখুন (যেমন: Inception):")
@@ -214,21 +209,13 @@ def movie_mode(message):
 def get_movie_link(message):
     query = message.text.strip()
     bot.reply_to(message, "⏳ পোস্টার খোঁজা হচ্ছে...")
-    
     data = search_tmdb(query, 'movie')
     state_data = {"query": query}
-    
     if data:
-        poster = f"https://image.tmdb.org/t/p/w500{data.get('poster_path')}" if data.get('poster_path') else ""
-        rating = data.get('vote_average', 'N/A')
-        overview = data.get('overview', '')
-        backdrop = f"https://image.tmdb.org/t/p/w780{data.get('backdrop_path')}" if data.get('backdrop_path') else ""
-        
-        state_data["poster"] = poster
-        state_data["rating"] = rating
-        state_data["overview"] = overview
-        state_data["ss1"] = backdrop
-    
+        state_data["poster"] = f"https://image.tmdb.org/t/p/w500{data.get('poster_path')}" if data.get('poster_path') else ""
+        state_data["rating"] = data.get('vote_average', 'N/A')
+        state_data["overview"] = data.get('overview', '')
+        state_data["ss1"] = f"https://image.tmdb.org/t/p/w780{data.get('backdrop_path')}" if data.get('backdrop_path') else ""
     set_state(message.chat.id, "movie_link", state_data)
     msg = bot.reply_to(message, "📝 এখন শুধু ডাউনলোড লিংকটা দিন:")
     bot.register_next_step_handler(msg, generate_movie_html)
@@ -237,7 +224,6 @@ def generate_movie_html(message):
     link = message.text.strip()
     state = states_collection.find_one({"user_id": message.chat.id})
     data = state.get("data", {})
-    
     poster = data.get("poster", "https://via.placeholder.com/400x600")
     rating = data.get("rating", "N/A")
     overview = data.get("overview", "")
@@ -252,30 +238,20 @@ def generate_movie_html(message):
         </div>
         <div class="movie-info">
             <h1 class="movie-title">{query}</h1>
-            <div class="movie-meta">
-                <span class="meta-tag green"><i class="fas fa-check-circle"></i> হাই কোয়ালিটি</span>
-            </div>
+            <div class="movie-meta"><span class="meta-tag green"><i class="fas fa-check-circle"></i> হাই কোয়ালিটি</span></div>
             <p class="movie-synopsis">{overview}</p>
         </div>
     </div>
-
     <h2 class="section-title"><i class="fas fa-images"></i> স্ক্রিনশট</h2>
-    <div class="screenshots-grid">
-        <div class="screenshot-item"><img src="{ss1}" alt="Screenshot"></div>
-    </div>
-
+    <div class="screenshots-grid"><div class="screenshot-item"><img src="{ss1}" alt="Screenshot"></div></div>
     <h2 class="section-title"><i class="fas fa-download"></i> ডাউনলোড</h2>
     <div class="download-section">
-        <button class="download-btn" onclick="startVerification('movie-download', '{link}')">
-            <i class="fas fa-download"></i> ডাউনলোড করুন
-        </button>
+        <button class="download-btn" onclick="startVerification('movie-download', '{link}')"><i class="fas fa-download"></i> ডাউনলোড করুন</button>
     </div>"""
 
     final_html = get_full_html(content)
-    bot.reply_to(message, f"✅ **মুভি পোস্ট রেডি!**\n(ভেরিফিকেশন + ২ অ্যাড সহ পুরো কোড)\n\n```html\n{final_html}\n```", parse_mode="Markdown")
+    bot.reply_to(message, f"✅ **মুভি পোস্ট রেডি!**\n\n```html\n{final_html}\n```", parse_mode="Markdown")
 
-
-# ============ সিরিজ মোড ============
 @bot.message_handler(commands=['series'])
 def series_mode(message):
     msg = bot.reply_to(message, "📺 এপিসোডের তথ্য দিন এভাবে:\n\nএপিসোড নম্বর\nএপিসোড নাম\nডাউনলোড লিংক\n\n(যেমন:\n05\nমোড\nhttps://your-link.com/file.mkv)")
@@ -286,25 +262,19 @@ def generate_series_html(message):
     if len(lines) < 3:
         bot.reply_to(message, "❌ সব তথ্য দেওয়া হয়নি! আবার `/series` চেষ্টা করুন।")
         return
-
     ep_num = lines[0].strip()
     ep_name = lines[1].strip()
     link = lines[2].strip()
-
-    # সিরিজের জন্য পুরো পেজের কোড বানাচ্ছে (যাতে ভেরিফিকেশন থাকে)
+    
     content = f"""<div class="episode-section">
         <h2 class="section-title" style="margin-top:0;"><i class="fas fa-tv"></i> এপিসোড লিস্ট</h2>
         <div class="episode-grid">
             <div class="episode-card new-ep">
                 <div class="episode-card-inner">
                     <div class="ep-number">{ep_num}</div>
-                    <div class="ep-info">
-                        <h4>এপিসোড {ep_num} — {ep_name} <span class="new-badge">NEW</span></h4>
-                    </div>
+                    <div class="ep-info"><h4>এপিসোড {ep_num} — {ep_name} <span class="new-badge">NEW</span></h4></div>
                     <div class="ep-downloads">
-                        <button class="ep-dl-btn" onclick="startVerification('S01E{ep_num}', '{link}')">
-                            <i class="fas fa-download"></i> ডাউনলোড
-                        </button>
+                        <button class="ep-dl-btn" onclick="startVerification('S01E{ep_num}', '{link}')"><i class="fas fa-download"></i> ডাউনলোড</button>
                     </div>
                 </div>
             </div>
@@ -312,11 +282,15 @@ def generate_series_html(message):
     </div>"""
 
     final_html = get_full_html(content)
-    bot.reply_to(message, f"✅ **এপিসোড কোড রেডি!**\n(ভেরিফিকেশন + ২ অ্যাড সহ পুরো কোড)\n\n```html\n{final_html}\n```", parse_mode="Markdown")
+    bot.reply_to(message, f"✅ **এপিসোড কোড রেডি!**\n\n```html\n{final_html}\n```", parse_mode="Markdown")
 
 
-# বট চালু রাখা
+# ============ মূল চালু করার অংশ ============
 if __name__ == '__main__':
+    # Render কে পোর্ট দেওয়ার জন্য Flask আলাদা থ্রেডে চালু করা
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # টেলিগ্রাম বট চালু রাখা
     print("🎬 MovieBoxBD Bot চালু হচ্ছে...")
     while True:
         try:

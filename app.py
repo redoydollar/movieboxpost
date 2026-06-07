@@ -79,7 +79,8 @@ async def set_ad(client, message):
     db.set_setting(args[1], args[2])
     await message.reply(f"✅ Ad updated for `{args[1]}`")
 
-@bot.on_message(filters.chat(MOVIE_CHANNEL) & (filters.document | filters.video))
+# ====== অটো-ইনডেক্সিং (সরাসরি চ্যানেল/গ্রুপ থেকে) ======
+@bot.on_message(filters.chat(INDEX_CHANNELS) & (filters.document | filters.video))
 async def auto_index(client, message):
     file_id = message.document.file_id if message.document else message.video.file_id
     file_unique_id = message.document.file_unique_id if message.document else message.video.file_unique_id
@@ -87,7 +88,7 @@ async def auto_index(client, message):
     file_size = message.document.file_size if message.document else message.video.file_size
     
     if db.add_file(file_id, file_unique_id, file_name, file_size, message.caption, message.id, message.chat.id):
-        print(f"Indexed: {file_name}")
+        print(f"✅ Auto-Indexed: {file_name}")
 
 # ============= FLASK WEB SERVER =============
 

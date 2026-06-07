@@ -2,6 +2,16 @@ import os
 import asyncio
 import threading
 import logging
+
+# ====== রেন্ডার এরর ফিক্স (খুব জরুরি) ======
+# পাইথনের নতুন ভার্সনে লুপ অটো বানায় না, তাই ম্যানুয়ালি বানিয়ে দিচ্ছি
+try:
+    loop = asyncio.get_running_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+# ================================================
+
 from flask import Flask, render_template, request, jsonify
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -33,7 +43,6 @@ async def auto_delete(client, chat_id, message_id):
 async def start(client, message):
     db.add_user(message.from_user.id, message.from_user.first_name, message.from_user.username or "")
     
-    # ভেরিফাই করে ফিরে আসলে ফাইল পাঠানো
     if len(message.command) > 1 and message.command[1].startswith("sendfile_"):
         token = message.command[1].split("_")[1]
         record = db.get_verified_token(token)
@@ -106,7 +115,7 @@ async def unban_user(client, message):
     db.unban_user(int(args[1]))
     await message.reply(f"✅ User `{args[1]}` unbanned.")
 
-# অটো-ইনডেক্সিং (চ্যানেল/গ্রুপ থেকে ফাইল সেভ)
+# অটো-ইনডেক্সিং 
 @bot.on_message(filters.chat(INDEX_CHANNELS) & (filters.document | filters.video))
 async def auto_index(client, message):
     file_id = message.document.file_id if message.document else message.video.file_id
@@ -150,21 +159,14 @@ def api_verify():
     else:
         return jsonify({"status": "error", "message": "আপনি ১০ সেকেন্ড অ্যাড দেখেননি! আবার চেষ্টা করুন।"})
 
-# ============= MAIN RUNNER (EVENT LOOP FIX) =============
-
-async def main():
-    logging.info("🚀 Starting Pyrogram Bot...")
-    await bot.start()
-    
-    logging.info("✅ Pyrogram Bot Started. Starting Flask Server...")
-    port = int(os.environ.get('PORT', 5000))
-    
-    # Flask কে ব্যাকগ্রাউন্ডে চালু করা হচ্ছে
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-    
-    # বটকে চালু রাখার জন্য ইভেন্ট লুপ ব্লক করা হচ্ছে
-    await asyncio.Event().wait()
+# ============= MAIN RUNNER =============
 
 if __name__ == '__main__':
-    # পাইথনের নতুন ভার্সনে এভাবে লুপ রান করলে এরর আসে না
-    asyncio.run(main())
+    # ১. Flask কে ব্যাকগ্রাউন্ডে চালু করা
+    port = int(os.environ.get('PORT', 5000))
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
+    logging.info("✅ Flask Server started")
+    
+    # ২. Pyrogram বট চালু করা (Main Thread এ)
+    logging.info("🚀 Starting Pyrogram Bot...")
+    bot.run()

@@ -17,7 +17,6 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 
 bot = telebot.TeleBot(TOKEN)
 
-# Get Bot Username for Deep Link
 BOT_USERNAME = ""
 try:
     BOT_USERNAME = bot.get_me().username
@@ -25,7 +24,7 @@ except:
     BOT_USERNAME = "YourBotUsername"
 
 # ==========================================
-# FLASK WEB SERVER (For Render Web Service)
+# FLASK WEB SERVER
 # ==========================================
 app = Flask(__name__)
 
@@ -41,25 +40,19 @@ def run_flask():
 # --- BLOGGER HTML GENERATOR ---
 def generate_blogger_html(data, movie_id):
     download_link = f"https://t.me/{BOT_USERNAME}?start=movie_{movie_id}"
+    safe_title = data.get('title', 'Unknown').replace("'", "")
+    safe_desc = data.get('description', '').replace("'", "")
     
-    return f"""<!-- MOVIE BOX PREMIUM POST TEMPLATE -->
+    return f"""<!-- MOVIE BOX PREMIUM POST -->
 <div style="background-color:#050505; font-family:'Poppins', sans-serif; color:#fff; padding:20px; border-radius:15px; max-width:800px; margin:auto; border:1px solid #222; box-shadow:0 0 30px rgba(0,243,255,0.1);">
-    
-    <!-- Backdrop Header -->
     <div style="width:100%; height:300px; background:url('{data.get('backdrop_url', '')}') center/cover; border-radius:12px; position:relative; margin-bottom:20px; box-shadow:0 0 25px rgba(0,0,0,0.8);">
         <div style="position:absolute; bottom:0; left:0; right:0; background:linear-gradient(to top, #050505, transparent); padding:20px; border-radius:0 0 12px 12px;">
-            <h1 style="margin:0; color:#fff; text-shadow:0 0 15px #00f3ff; font-size:28px; text-transform:uppercase;">{data.get('title', 'Unknown')}</h1>
+            <h1 style="margin:0; color:#fff; text-shadow:0 0 15px #00f3ff; font-size:28px; text-transform:uppercase;">{safe_title}</h1>
             <span style="background:#ff00ff; color:#000; padding:5px 10px; border-radius:5px; font-weight:bold; font-size:12px;">⭐ {data.get('rating', 'N/A')} | {data.get('genres', 'Movie')}</span>
         </div>
     </div>
-
-    <!-- Glassmorphism Info Card -->
     <div style="background:rgba(255,255,255,0.05); backdrop-filter:blur(10px); border:1px solid rgba(0,243,255,0.2); border-radius:12px; padding:20px; margin-bottom:20px; display:flex; gap:20px; flex-wrap:wrap;">
-        
-        <!-- Poster -->
         <img src="{data.get('poster_url', '')}" style="width:150px; height:auto; border-radius:8px; box-shadow:0 0 20px rgba(0,243,255,0.3); border:2px solid #00f3ff;"/>
-        
-        <!-- Info Table -->
         <div style="flex:1; min-width:200px;">
             <table style="width:100%; border-collapse:collapse; font-size:14px;">
                 <tr style="border-bottom:1px solid #222;"><td style="color:#888; padding:8px 0;">Rating</td><td style="color:#f5c518; font-weight:bold;">⭐ {data.get('rating', 'N/A')} / 10</td></tr>
@@ -68,19 +61,14 @@ def generate_blogger_html(data, movie_id):
             </table>
         </div>
     </div>
-
-    <!-- Storyline -->
     <div style="background:rgba(0,0,0,0.5); border-left:4px solid #ff00ff; padding:15px; margin-bottom:20px; border-radius:0 8px 8px 0;">
         <h3 style="margin:0 0 10px 0; color:#ff00ff; text-transform:uppercase; font-size:16px;">Storyline</h3>
-        <p style="margin:0; color:#ccc; line-height:1.6; font-size:13px;">{data.get('description', 'No description available.')}</p>
+        <p style="margin:0; color:#ccc; line-height:1.6; font-size:13px;">{safe_desc}</p>
     </div>
-
-    <!-- Download Button -->
     <div style="background:rgba(0,243,255,0.05); padding:20px; border-radius:12px; text-align:center; border:1px solid rgba(0,243,255,0.3);">
         <h3 style="margin:0 0 15px 0; color:#fff; text-transform:uppercase; letter-spacing:2px;">Download File</h3>
-        <a href="{download_link}" style="display:inline-block; background:#0a0a0a; border:2px solid #00f3ff; color:#00f3ff; padding:12px 35px; border-radius:50px; text-decoration:none; font-weight:bold; font-size:16px; box-shadow:0 0 15px rgba(0,243,255,0.4); transition:0.3s;">📥 Download Now</a>
+        <a href="{download_link}" style="display:inline-block; background:#0a0a0a; border:2px solid #00f3ff; color:#00f3ff; padding:12px 35px; border-radius:50px; text-decoration:none; font-weight:bold; font-size:16px; box-shadow:0 0 15px rgba(0,243,255,0.4);">📥 Download Now</a>
     </div>
-
 </div>"""
 
 # --- TMDB API Functions ---
@@ -143,7 +131,7 @@ def admin_panel(message):
     )
     bot.send_message(message.chat.id, "🛠 *Admin Control Panel*", parse_mode="Markdown", reply_markup=markup)
 
-# --- User: Deep Link Start (Blogger to Bot) & Normal Start ---
+# --- User: Deep Link Start & Normal Start ---
 @bot.message_handler(commands=['start'])
 def start(message):
     payload = message.text.split()[1] if len(message.text.split()) > 1 else None
@@ -168,7 +156,7 @@ def start(message):
 def search_content(message):
     user_id = message.from_user.id
     state = get_state(user_id)
-    if state: return
+    if state: return # Admin workflow e thakle ar search hobe na
 
     query = message.text.lower()
     movies = list(movies_col.find({"title": {"$regex": query, "$options": "i"}}).limit(5))
@@ -179,8 +167,15 @@ def search_content(message):
     for s in series: buttons.append([telebot.types.InlineKeyboardButton(f"📺 {s['title']}", callback_data=f"ser_{s['_id']}")])
 
     if not buttons:
-        bot.reply_to(message, "❌ No results found.")
+        # If Admin searches and nothing found, give option to add from TMDB
+        if is_admin(user_id):
+            markup = telebot.types.InlineKeyboardMarkup()
+            markup.add(telebot.types.InlineKeyboardButton("🔍 Search TMDB to Add Movie", callback_data=f"tmdb_search_{message.text}"))
+            bot.reply_to(message, "❌ No results found in database.\n\nAs an admin, you can add this from TMDB:", reply_markup=markup)
+        else:
+            bot.reply_to(message, "❌ No results found.")
         return
+        
     bot.send_message(user_id, "🔍 Search Results:", reply_markup=telebot.types.InlineKeyboardMarkup(buttons))
 
 # --- All Callbacks ---
@@ -195,6 +190,16 @@ def callback_query(call):
         set_state(user_id, "wait_tmdb_query")
         bot.send_message(user_id, "🎬 Send Movie Name to search in TMDB:")
         
+    elif data.startswith("tmdb_search_"):
+        # Direct search button from chat
+        query = data.replace("tmdb_search_", "")
+        results = search_tmdb_movie(query)
+        if not results:
+            bot.answer_callback_query(call.id, "❌ Not found on TMDB!"); return
+        markup = telebot.types.InlineKeyboardMarkup()
+        for r in results: markup.add(telebot.types.InlineKeyboardButton(f"{r.get('title', 'N/A')} ({r.get('release_date', '')[:4]})", callback_data=f"tmdb_{r['id']}"))
+        bot.send_message(user_id, "Select a movie:", reply_markup=markup)
+
     elif data == "admin_add_series":
         if not is_admin(user_id): return
         set_state(user_id, "wait_tmdb_tv_query")
@@ -226,7 +231,9 @@ def callback_query(call):
     elif data.startswith("tmdb_"):
         tmdb_id = data.split('_')[1]
         details = get_tmdb_movie_details(tmdb_id)
-        
+        if not details.get('id'):
+            bot.answer_callback_query(call.id, "❌ Error fetching details from TMDB."); return
+            
         genres = ", ".join([g['name'] for g in details.get('genres', [])])
         temp_data = {
             "title": details.get('title', 'Unknown'), 
@@ -244,13 +251,16 @@ def callback_query(call):
             msg = bot.send_photo(user_id, poster_url, caption=f"🎬 Selected: *{temp_data['title']}*\n\nNow send Screenshots (Album) or type `skip`:", parse_mode="Markdown")
             temp_data['poster_file_id'] = msg.photo[-1].file_id
         else:
-            bot.send_message(user_id, "No poster. Send Poster Image manually:")
+            bot.send_message(user_id, "No poster found. Send Poster Image manually:")
             temp_data['poster_file_id'] = ""
         set_state(user_id, "add_mov_ss", temp_data)
 
     elif data.startswith("tmdbtv_"):
         tv_id = data.split('_')[1]
         details = get_tmdb_tv_details(tv_id)
+        if not details.get('id'):
+            bot.answer_callback_query(call.id, "❌ Error fetching details from TMDB."); return
+            
         temp_data = {"title": details.get('name', 'Unknown'), "description": details.get('overview', 'No description.')}
         poster_path = details.get('poster_path')
         if poster_path:
@@ -289,49 +299,69 @@ def callback_query(call):
         ad_config = ads_col.find_one({})
         if not ad_config or not ad_config.get("ads_enabled"):
             deliver_file(user_id, data); return
+            
         is_adult = False
-        if data.startswith('dl_mov_'):
-            movie = movies_col.find_one({"_id": ObjectId(data.split('_')[2])})
+        file_type = "mov" if data.startswith('dl_mov_') else "ep"
+        db_id = data.split('_')[2]
+        
+        if file_type == "mov":
+            movie = movies_col.find_one({"_id": ObjectId(db_id)})
             if movie: is_adult = movie.get('is_adult', False)
-            file_identifier = data 
         else:
-            series = series_col.find_one({"_id": ObjectId(data.split('_')[2])})
+            series = series_col.find_one({"_id": ObjectId(db_id)})
             if series: is_adult = series.get('is_adult', False)
-            file_identifier = data 
+            
         ad1 = ad_config['adult_ad1'] if is_adult else ad_config['normal_ad1']
         ad2 = ad_config['adult_ad2'] if is_adult else ad_config['normal_ad2']
-        if not ad1 or not ad2:
-            bot.send_message(user_id, "⚠️ Ads not set. Use /admin"); return
         
-        # Ad 1 Display Logic (URL Button + Timer)
+        if not ad1 or not ad2:
+            bot.send_message(user_id, "⚠️ Ads not configured by admin yet."); return
+        
+        # AD 1 Display
         wait_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
         wait_btn.add(
-            telebot.types.InlineKeyboardButton("🔗 Visit Ad Link", url=ad1),
-            telebot.types.InlineKeyboardButton("⏳ Ad 1: Wait...", callback_data="ignore")
+            telebot.types.InlineKeyboardButton("🔗 Visit Ad Link 1", url=ad1),
+            telebot.types.InlineKeyboardButton("⏳ Wait here...", callback_data="ignore")
         )
-        ad_msg = bot.send_message(user_id, "⚠️ *Step 1:* Visit the ad link below and wait a few seconds.", parse_mode="Markdown", reply_markup=wait_btn)
+        ad_msg = bot.send_message(user_id, "⚠️ *Step 1:* Click the ad link below, wait 5 seconds, then come back.", parse_mode="Markdown", reply_markup=wait_btn)
             
         next_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
-        next_btn.add(telebot.types.InlineKeyboardButton("➡️ Next Ad", callback_data=f"ad2_{file_identifier}_{ad2}"))
+        next_btn.add(telebot.types.InlineKeyboardButton("➡️ Go to Ad 2", callback_data=f"nextad_{file_type}_{db_id}"))
         threading.Thread(target=ad_timer, args=(user_id, ad_msg.message_id, next_btn)).start()
 
-    elif data.startswith('ad2_'):
-        parts = data.split('_'); file_identifier = parts[1]; ad2_url = parts[2]
+    elif data.startswith('nextad_'):
+        # AD 2 Display
+        file_type = data.split('_')[1]
+        db_id = data.split('_')[2]
         
-        # Ad 2 Display Logic (URL Button + Timer)
+        ad_config = ads_col.find_one({})
+        is_adult = False
+        if file_type == "mov":
+            movie = movies_col.find_one({"_id": ObjectId(db_id)})
+            if movie: is_adult = movie.get('is_adult', False)
+        else:
+            series = series_col.find_one({"_id": ObjectId(db_id)})
+            if series: is_adult = series.get('is_adult', False)
+            
+        ad2 = ad_config['adult_ad2'] if is_adult else ad_config['normal_ad2']
+        
         wait_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
         wait_btn.add(
-            telebot.types.InlineKeyboardButton("🔗 Visit Ad Link", url=ad2_url),
-            telebot.types.InlineKeyboardButton("⏳ Ad 2: Wait...", callback_data="ignore")
+            telebot.types.InlineKeyboardButton("🔗 Visit Ad Link 2", url=ad2),
+            telebot.types.InlineKeyboardButton("⏳ Wait here...", callback_data="ignore")
         )
-        ad_msg = bot.send_message(user_id, "⚠️ *Step 2:* Visit the second ad link below.", parse_mode="Markdown", reply_markup=wait_btn)
+        ad_msg = bot.send_message(user_id, "⚠️ *Step 2:* Click the second ad link below, wait 5 seconds.", parse_mode="Markdown", reply_markup=wait_btn)
             
         final_btn = telebot.types.InlineKeyboardMarkup(row_width=1)
-        final_btn.add(telebot.types.InlineKeyboardButton("✅ Get File", callback_data=f"finaldl_{file_identifier}"))
+        final_btn.add(telebot.types.InlineKeyboardButton("✅ Get File", callback_data=f"finaldl_{file_type}_{db_id}"))
         threading.Thread(target=ad_timer, args=(user_id, ad_msg.message_id, final_btn)).start()
 
     elif data.startswith('finaldl_'):
-        deliver_file(user_id, data[8:])
+        file_type = data.split('_')[1]
+        db_id = data.split('_')[2]
+        data_id = f"dl_{file_type}_{db_id}"
+        deliver_file(user_id, data_id)
+        
     elif data == 'ignore':
         bot.answer_callback_query(call.id, text="Please wait for the timer to finish...")
 
@@ -375,7 +405,6 @@ def handle_state(message):
             if not message.document and not message.video: return bot.reply_to(user_id, "Send a file.")
             temp['movie_file_id'] = message.document.file_id if message.document else message.video.file_id
             
-            # Insert Movie to DB
             inserted_movie = movies_col.insert_one({
                 "title": temp['title'], "poster_file_id": temp.get('poster_file_id', ''), 
                 "screenshots": temp.get('screenshots', []), "movie_file_id": temp['movie_file_id'], 
@@ -383,15 +412,13 @@ def handle_state(message):
                 "is_adult": False
             })
             
-            # Generate Blogger HTML
             html_code = generate_blogger_html(temp, inserted_movie.inserted_id)
             markup = telebot.types.InlineKeyboardMarkup()
             markup.add(telebot.types.InlineKeyboardButton("📋 Copy Blogger HTML", callback_data=f"copy_html_{inserted_movie.inserted_id}"))
             
             bot.reply_to(user_id, "✅ Movie Added Successfully!")
-            bot.send_message(user_id, "🔥 *Blogger HTML Code Generated!*\n\nClick the button below to copy the code, then paste it in your Blogger HTML View.", parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(user_id, "🔥 *Blogger HTML Code Generated!*\n\nClick the button below to copy the code.", parse_mode="Markdown", reply_markup=markup)
             
-            # Save HTML in state temporarily for copy button
             set_state(user_id, 'html_generated', {'html': html_code})
 
         elif action == 'add_ep_name':

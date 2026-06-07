@@ -2,16 +2,6 @@ import os
 import asyncio
 import threading
 import logging
-
-# ====== রেন্ডার এরর ফিক্স (খুব জরুরি) ======
-# পাইথনের নতুন ভার্সনে লুপ অটো বানায় না, তাই ম্যানুয়ালি বানিয়ে দিচ্ছি
-try:
-    loop = asyncio.get_running_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-# ================================================
-
 from flask import Flask, render_template, request, jsonify
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -19,6 +9,7 @@ from config import *
 from database import db
 from utils import is_adult
 
+# Flask App
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
@@ -159,14 +150,23 @@ def api_verify():
     else:
         return jsonify({"status": "error", "message": "আপনি ১০ সেকেন্ড অ্যাড দেখেননি! আবার চেষ্টা করুন।"})
 
-# ============= MAIN RUNNER =============
+# ============= MAIN RUNNER (THE ULTIMATE FIX) =============
+
+def run_flask():
+    """Flask কে Background থ্রেডে চালানোর ফাংশন"""
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+async def run_pyrogram():
+    """Pyrogram কে অ্যাসিঙ্ক্রোনাস ভাবে চালানোর ফাংশন"""
+    await bot.start()
+    logging.info("🚀 Pyrogram Bot Started Successfully!")
+    await asyncio.Event().wait() # বটকে চালু রাখার জন্য
 
 if __name__ == '__main__':
-    # ১. Flask কে ব্যাকগ্রাউন্ডে চালু করা
-    port = int(os.environ.get('PORT', 5000))
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-    logging.info("✅ Flask Server started")
+    # ১. প্রথমে Flask কে ব্যাকগ্রাউন্ড থ্রেডে চালু করো
+    threading.Thread(target=run_flask, daemon=True).start()
+    logging.info("✅ Flask Server Started")
     
-    # ২. Pyrogram বট চালু করা (Main Thread এ)
-    logging.info("🚀 Starting Pyrogram Bot...")
-    bot.run()
+    # ২. এরপর Pyrogram কে asyncio.run() দিয়ে মেইন থ্রেডে চালু করো (এটা লুপ এরর ১০০% ফিক্স করবে)
+    asyncio.run(run_pyrogram())

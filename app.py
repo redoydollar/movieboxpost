@@ -1,25 +1,32 @@
 import os
-import uvicorn
+import asyncio
+import threading
 import logging
-from fastapi import FastAPI, Request
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse
+
+# =================================================================
+# 🔥 THE ULTIMATE FIX: কোড রান হওয়ার সাথে সাথেই একটা Event Loop বানিয়ে দেওয়া
+# Pyrogram Client তৈরি হওয়ার আগেই এটা হতে হবে, না হলে RuntimeError আসবেই!
+# =================================================================
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+# =================================================================
+
+from flask import Flask, render_template, request, jsonify
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import *
 from database import db
 from utils import is_adult
 
-# FastAPI App
-app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+# Flask App
+app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def get_ad_url(key, default):
     val = db.get_setting(key, default)
     return val if val else default
 
-# Pyrogram Bot
+# Pyrogram Bot (এখন এটা এরর দেবে না কারণ উপরে লুপ বানিয়ে দিয়েছি)
 bot = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ============= AUTO DELETE FUNCTION =============
@@ -147,54 +154,62 @@ async def auto_index_handler(client, message):
     if db.add_file(file_id, file_unique_id, file_name, file_size, message.caption, message.id, message.chat.id):
         logging.info(f"✅ Auto-Indexed: {file_name}")
 
-# ============= FASTAPI ROUTES =============
+# ============= FLASK ROUTES =============
 
-@app.get("/")
-async def home():
-    return {"status": "Bot is running!"}
+@app.route('/')
+def home():
+    return "✅ CTG Movie Bot is Running!", 200
 
-@app.get("/verify", response_class=HTMLResponse)
-async def verify_page(request: Request, token: str, type: str = "normal"):
+@app.route('/verify')
+def verify_page():
+    token = request.args.get('token')
+    ad_type = request.args.get('type', 'normal')
     if not token:
         return "Invalid Link!", 404
     
-    if type == "adult":
+    if ad_type == "adult":
         ad1 = get_ad_url("adult_ad_1", ADULT_AD_1)
         ad2 = get_ad_url("adult_ad_2", ADULT_AD_2)
     else:
         ad1 = get_ad_url("normal_ad_1", NORMAL_AD_1)
         ad2 = get_ad_url("normal_ad_2", NORMAL_AD_2)
 
-    return templates.TemplateResponse("verify.html", {"request": request, "token": token, "ad1": ad1, "ad2": ad2, "bot_username": BOT_USERNAME})
+    return render_template('verify.html', token=token, ad1=ad1, ad2=ad2, bot_username=BOT_USERNAME)
 
-@app.post("/api/verify")
-async def api_verify(request: Request):
-    data = await request.json()
+@app.route('/api/verify', methods=['POST'])
+def api_verify():
+    data = request.json
     token = data.get('token')
     if not token:
-        return JSONResponse({"status": "error", "message": "Token missing"}, status_code=400)
+        return jsonify({"status": "error", "message": "Token missing"}), 400
     
     record = db.verify_token(token)
     if record:
-        return {"status": "success", "bot_username": BOT_USERNAME, "token": token}
+        return jsonify({"status": "success", "bot_username": BOT_USERNAME, "token": token})
     else:
-        return JSONResponse({"status": "error", "message": "ভেরিফিকেশন ব্যর্থ! আবার চেষ্টা করুন।"}, status_code=403)
+        return jsonify({"status": "error", "message": "ভেরিফিকেশন ব্যর্থ! আবার চেষ্টা করুন।"})
 
-# ============= FASTAPI + PYROGRAM STARTUP =============
+# ============= MAIN RUNNER =============
 
-@app.on_event("startup")
-async def startup_event():
-    """FastAPI চালু হওয়ার সাথে সাথেই বট চালু হবে"""
-    await bot.start()
-    logging.info("🚀 Pyrogram Bot Started Successfully!")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """সার্ভার বন্ধ হলে বটও বন্ধ হবে"""
-    await bot.stop()
-
-# ============= MAIN ENTRY POINT =============
+def run_pyrogram_bot():
+    """বটকে ব্যাকগ্রাউন্ড থ্রেডে চালানোর ফাংশন"""
+    global loop
+    asyncio.set_event_loop(loop)
+    
+    try:
+        loop.run_until_complete(bot.start())
+        logging.info("🚀 Pyrogram Bot Started Successfully!")
+        loop.run_forever()
+    except Exception as e:
+        logging.error(f"Bot crashed: {e}")
 
 if __name__ == '__main__':
+    # Step 1: বটকে ব্যাকগ্রাউন্ডে চালু করো
+    bot_thread = threading.Thread(target=run_pyrogram_bot, daemon=True)
+    bot_thread.start()
+    logging.info("⏳ Bot thread initialized...")
+    
+    # Step 2: Flask কে মেইন থ্রেডে চালু করো (Render এর জন্য)
     port = int(os.environ.get('PORT', 5000))
-    uvicorn.run(app, host='0.0.0.0', port=port)
+    logging.info(f"✅ Starting Flask Server on port {port}...")
+    app.run(host='0.0.0.0', port=port, use_reloader=False)

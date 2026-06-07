@@ -3,15 +3,16 @@ import telebot
 import requests
 import pymongo
 import threading
-import time
+import json
 from datetime import datetime
-from flask import Flask, render_template_string, request # Fixed import here
+from flask import Flask, request
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 BLOGGER_URL = os.environ.get("BLOGGER_URL")
+TMDB_KEY = os.environ.get("TMDB_API_KEY") # Add this to Render Environment Variables!
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -19,425 +20,264 @@ app = Flask(__name__)
 # --- MONGODB SETUP ---
 client = pymongo.MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
 db = client["movie_bot_db"]
-movies_col = db["movies"]
 settings_col = db["settings"]
-blogger_col = db["blogger_tracking"]
+user_workflow = {} # To track multi-step user actions
 
 if settings_col.count_documents({}) == 0:
     settings_col.insert_one({
         "type": "bot_config",
         "channel": os.environ.get("CHANNEL_USERNAME", "@AllLatestMovie302"),
-        "file_store_bot": "YourFileStoreBotUsername",
-        "tmdb_api": "", 
-        "ad_step1": "<!-- Normal Ad Step 1 -->",
-        "ad_step2": "<!-- Normal Ad Step 2 -->",
-        "ad_18_step1": "<!-- 18+ Ad Step 1 -->",
-        "ad_18_step2": "<!-- 18+ Ad Step 2 -->",
+        "website": "https://www.movieboxbd.xyz",
+        "ad_link": "https://www.effectivecpmnetwork.com/t0t62pphrs?key=your_key",
         "admins": [OWNER_ID]
     })
-
-if blogger_col.count_documents({}) == 0:
-    blogger_col.insert_one({"type": "last_post", "post_id": "0"})
 
 def get_setting(key):
     doc = settings_col.find_one({"type": "bot_config"})
     return doc.get(key, "") if doc else ""
 
 def is_admin(user_id):
-    admins = get_setting("admins") or [OWNER_ID]
-    return user_id in admins
-
-# --- FLASK APP FOR UNLOCK PAGE (FIXED) ---
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unlock Download - Movie Box</title>
-    <style>
-        body { background-color: #05060a; color: #f1f5f9; font-family: 'Poppins', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .unlock-card { background: #111217; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; border: 1px solid #222; }
-        .btn { background: linear-gradient(135deg, #cc0000, #ff1a1a); color: #fff; padding: 12px 25px; border-radius: 30px; text-decoration: none; font-weight: 800; display: inline-block; margin: 10px 0; border: none; cursor: pointer; }
-        .btn-blue { background: linear-gradient(135deg, #38bdf8, #0ea5e9); color: #000; }
-        .ad-container { background: #000; margin: 15px 0; padding: 10px; border-radius: 8px; min-height: 100px; border: 1px dashed #333; }
-        .hidden { display: none; }
-        #age-gate { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 1000; display: flex; justify-content: center; align-items: center; }
-        .age-box { background: #111; padding: 30px; border-radius: 10px; border: 2px solid #ff0000; text-align: center; }
-    </style>
-</head>
-<body>
-    <div id="age-gate" class="hidden">
-        <div class="age-box">
-            <h2 style="color:#ff4d4d;">⚠️ 18+ Content Warning</h2>
-            <p>এই কন্টেন্টটি শুধুমাত্র ১৮+ দর্শকদের জন্য।<br>আপনি কি ১৮ বছরের বেশি বয়সী?</p>
-            <button class="btn" onclick="verifyAge(true)">হ্যাঁ, আমি ১৮+ আছি</button>
-            <button class="btn btn-blue" onclick="verifyAge(false)">না, ফিরে যাব</button>
-        </div>
-    </div>
-    <div class="unlock-card">
-        <h2 style="color:#38bdf8;">🔓 Unlock Download</h2>
-        <p style="font-size:13px; color:#aaa;">ফাইল ডাউনলোড করতে নিচের ২টি ধাপ সম্পন্ন করুন</p>
-        <div id="step1">
-            <h3 style="color:#fff; font-size:14px;">Step 1: Verify You Are Human</h3>
-            <div class="ad-container">{{ ad_step1 | safe }}</div>
-            <button class="btn" onclick="completeStep1()">Verify Step 1 ✅</button>
-        </div>
-        <div id="step2" class="hidden">
-            <h3 style="color:#fff; font-size:14px;">Step 2: Final Verification</h3>
-            <div class="ad-container">{{ ad_step2 | safe }}</div>
-            <button class="btn" onclick="completeStep2()">Unlock Download 🔓</button>
-        </div>
-        <div id="final-step" class="hidden">
-            <h3 style="color:#00ff00;">✅ Verification Complete!</h3>
-            <a id="final-link" href="#" class="btn btn-blue">⬇️ Go to File Store Bot</a>
-        </div>
-    </div>
-    <script>
-        const urlParams = new URLSearchParams(window.location.search);
-        const isAdult = urlParams.get('is_adult');
-        const token = urlParams.get('token');
-        const fileStoreBase = "https://t.me/{{ file_store_bot }}?start=";
-        window.onload = () => { if(isAdult === '1') document.getElementById('age-gate').classList.remove('hidden'); };
-        function verifyAge(isAdult) { if(isAdult) document.getElementById('age-gate').classList.add('hidden'); else window.history.back(); }
-        function completeStep1() { document.getElementById('step1').style.display = 'none'; document.getElementById('step2').classList.remove('hidden'); }
-        function completeStep2() { document.getElementById('step2').style.display = 'none'; document.getElementById('final-step').classList.remove('hidden'); document.getElementById('final-link').href = fileStoreBase + token; }
-    </script>
-</body>
-</html>
-"""
-
-@app.route('/unlock')
-def unlock_page():
-    is_adult = request.args.get('is_adult', '0') # FIXED BUG HERE
-    if is_adult == '1':
-        ad_step1 = get_setting("ad_18_step1")
-        ad_step2 = get_setting("ad_18_step2")
-    else:
-        ad_step1 = get_setting("ad_step1")
-        ad_step2 = get_setting("ad_step2")
-    return render_template_string(HTML_TEMPLATE, ad_step1=ad_step1, ad_step2=ad_step2, file_store_bot=get_setting("file_store_bot"))
+    return user_id in get_setting("admins") or user_id == OWNER_ID
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# --- BLOGGER AUTO-UPLOAD CHECKER (BEAUTIFUL FORMAT) ---
-def check_blogger_updates():
-    while True:
-        try:
-            feed_url = f"{BLOGGER_URL}/feeds/posts/default?alt=json&max-results=1"
-            response = requests.get(feed_url).json()
-            if 'feed' in response and 'entry' in response['feed']:
-                latest_post = response['feed']['entry'][0]
-                post_id = latest_post['id']['$t']
-                last_doc = blogger_col.find_one({"type": "last_post"})
-                if post_id != last_doc['post_id']:
-                    title = latest_post['title']['$t']
-                    link = latest_post['link'][-1]['href']
-                    is_18plus = 0
-                    if 'category' in latest_post:
-                        for cat in latest_post['category']:
-                            if cat['term'].lower() in ['adult', '18+', '18 plus', 'adult movie and series']:
-                                is_18plus = 1; break
-                    unlock_token = f"BLOG_{title.replace(' ', '_')}_{datetime.now().timestamp()}"
-                    movies_col.insert_one({"title": title, "blog_url": link, "token": unlock_token, "is_18plus": is_18plus})
-                    blogger_col.update_one({"type": "last_post"}, {"$set": {"post_id": post_id}})
-                    
-                    render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
-                    unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult={is_18plus}"
-                    
-                    # Beautiful HTML Format for Auto Post
-                    channel_text = f"""
-🎬 <b>{title}</b>
+# --- PREMIUM HTML GENERATOR (NETFLIX + CYBERPUNK) ---
+def generate_premium_html(data):
+    lang = data.get('language', 'N/A')
+    quality = data.get('quality', 'N/A')
+    title = data.get('title', 'N/A')
+    year = data.get('year', 'N/A')
+    imdb = data.get('imdb', 'N/A')
+    genre = data.get('genre', 'N/A')
+    runtime = data.get('runtime', 'N/A')
+    plot = data.get('plot', 'N/A')
+    poster = data.get('poster', '')
+    backdrop = data.get('backdrop', '')
+    trailer = data.get('trailer', '')
+    cast_list = data.get('cast', [])
+    dl_link = data.get('dl_link', '#')
+    ad_link = get_setting("ad_link")
+    website = get_setting("website")
 
-🔓 <b>Download Link:</b> 
-<a href="{unlock_link}">⬇️ Click Here to Unlock & Download</a>
+    cast_html = ""
+    for c in cast_list[:4]:
+        cast_html += f'<div class="cast-card"><img src="{c["img"]}"/><span>{c["name"]}</span></div>'
 
-⚠️ <i>কপিরাইট ইস্যু থাকলে যোগাযোগ করুন।</i>
+    return f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8'/>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'/>
+<title>{title} Download - MOVIE BOX</title>
+<style>
+    :root {{ --neon-cyan: #00f3ff; --neon-green: #39ff14; --neon-pink: #ff00ff; --bg-dark: #050505; --card-bg: rgba(10, 10, 10, 0.8); }}
+    body {{ background-color: var(--bg-dark); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 15px; }}
+    .movie-container {{ max-width: 500px; margin: 0 auto; border: 1px solid var(--neon-cyan); border-radius: 15px; overflow: hidden; background: var(--card-bg); backdrop-filter: blur(10px); box-shadow: 0 0 20px rgba(0, 243, 255, 0.2); }}
+    .backdrop {{ width: 100%; height: 200px; object-fit: cover; opacity: 0.6; mask-image: linear-gradient(to bottom, black, transparent); -webkit-mask-image: linear-gradient(to bottom, black, transparent); }}
+    .poster-wrapper {{ display: flex; margin-top: -100px; padding: 0 15px; gap: 15px; align-items: flex-end; }}
+    .poster {{ width: 120px; height: 180px; border-radius: 10px; border: 2px solid var(--neon-pink); box-shadow: 0 0 15px rgba(255, 0, 255, 0.4); object-fit: cover; }}
+    .title-section {{ padding-bottom: 10px; }}
+    .title {{ font-size: 20px; font-weight: bold; color: #fff; text-shadow: 0 0 5px var(--neon-cyan); margin: 0; }}
+    .tags {{ display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }}
+    .tag {{ background: rgba(0, 243, 255, 0.1); border: 1px solid var(--neon-cyan); color: var(--neon-cyan); padding: 3px 8px; border-radius: 50px; font-size: 11px; font-weight: bold; box-shadow: 0 0 5px rgba(0, 243, 255, 0.2); }}
+    .info-table {{ width: 100%; padding: 15px; border-collapse: collapse; }}
+    .info-table td {{ padding: 5px 0; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.1); }}
+    .info-table td:first-child {{ color: #aaa; width: 30%; }}
+    .story {{ padding: 0 15px 15px; font-size: 13px; line-height: 1.5; color: #ccc; }}
+    .cast-section {{ padding: 0 15px 15px; }}
+    .cast-grid {{ display: flex; gap: 10px; overflow-x: auto; padding-bottom: 10px; }}
+    .cast-card {{ display: flex; flex-direction: column; align-items: center; min-width: 70px; }}
+    .cast-card img {{ width: 60px; height: 60px; border-radius: 50%; object-fit: cover; border: 1px solid var(--neon-green); }}
+    .cast-card span {{ font-size: 10px; margin-top: 5px; color: #fff; text-align: center; }}
+    .btn-container {{ padding: 0 15px 15px; display: flex; flex-direction: column; gap: 10px; }}
+    .neon-btn {{ display: block; text-align: center; padding: 12px; border-radius: 50px; text-decoration: none; font-weight: bold; font-size: 14px; transition: 0.3s; }}
+    .btn-dl {{ background: #0a0a0a; border: 1px solid var(--neon-cyan); color: var(--neon-cyan); box-shadow: 0 0 10px rgba(0, 243, 255, 0.3); }}
+    .btn-dl:hover {{ background: var(--neon-green); color: #000; border-color: var(--neon-green); box-shadow: 0 0 20px rgba(57, 255, 20, 0.5); }}
+    .btn-trailer {{ background: transparent; border: 1px solid var(--neon-pink); color: var(--neon-pink); }}
+    .footer {{ text-align: center; padding: 15px; font-size: 11px; color: #555; }}
+    .footer a {{ color: var(--neon-cyan); text-decoration: none; }}
+</style>
+</head>
+<body>
+<div class='movie-container'>
+    {f"<img class='backdrop' src='{backdrop}'/>" if backdrop else ""}
+    <div class='poster-wrapper'>
+        <img class='poster' src='{poster}'/>
+        <div class='title-section'>
+            <h2 class='title'>{title}</h2>
+            <div class='tags'>
+                <span class='tag'>⭐ {imdb}</span>
+                <span class='tag'>📅 {year}</span>
+                <span class='tag'>⏱️ {runtime} min</span>
+                <span class='tag'>🎭 {genre.split(",")[0]}</span>
+            </div>
+        </div>
+    </div>
+    
+    <table class='info-table'>
+        <tr><td>Language</td><td>{lang}</td></tr>
+        <tr><td>Quality</td><td>{quality}</td></tr>
+        <tr><td>Genre</td><td>{genre}</td></tr>
+    </table>
+
+    <div class='story'><strong>📖 Storyline:</strong><br/>{plot}</div>
+    
+    {f"<div class='cast-section'><strong>🌟 Cast:</strong><div class='cast-grid'>{cast_html}</div></div>" if cast_list else ""}
+    
+    <div class='btn-container'>
+        <a href='{ad_link}' class='neon-btn btn-dl' target='_blank'>⬇️ Download {quality} - {lang}</a>
+        {f"<a href='{trailer}' class='neon-btn btn-trailer' target='_blank'>▶️ Watch Trailer</a>" if trailer != "N/A" else ""}
+    </div>
+    
+    <div class='footer'>Powered by <a href='{website}'>MOVIE BOX</a></div>
+</div>
+</body>
+</html>
 """
-                    markup = telebot.types.InlineKeyboardMarkup()
-                    markup.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
-                    markup.add(telebot.types.InlineKeyboardButton("🌐 Read More", url=link))
-                    
-                    bot.send_message(get_setting("channel"), channel_text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
-        except Exception as e:
-            print(f"Blogger Error: {e}")
-        time.sleep(120)
-
-# --- TMDb AUTO FETCH MOVIE ---
-def fetch_movie_data(movie_name):
-    tmdb_key = get_setting("tmdb_api")
-    if not tmdb_key: return None
-    url = f"https://api.themoviedb.org/3/search/movie?api_key={tmdb_key}&query={movie_name}"
-    try:
-        response = requests.get(url).json()
-        if response.get('results'):
-            movie = response['results'][0]
-            movie_id = movie['id']
-            details = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={tmdb_key}").json()
-            videos = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={tmdb_key}").json()
-            images = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/images?api_key={tmdb_key}").json()
-            trailer_key = ""
-            for v in videos.get('results', []):
-                if v['type'] == 'Trailer' and v['site'] == 'YouTube': trailer_key = v['key']; break
-            screenshots = [img['file_path'] for img in images.get('backdrops', [])[:3]]
-            return {
-                'title': details.get('title', 'N/A'), 'year': details.get('release_date', 'N/A').split('-')[0],
-                'imdb': details.get('vote_average', 'N/A'), 'genre': ', '.join([g['name'] for g in details.get('genres', [])]),
-                'runtime': str(details.get('runtime', 'N/A')), 'language': details.get('original_language', 'N/A').upper(),
-                'plot': details.get('overview', 'N/A'), 'poster': f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}",
-                'screenshots': screenshots, 'trailer': f"https://youtube.com/watch?v={trailer_key}" if trailer_key else "N/A"
-            }
-    except Exception as e:
-        print(f"TMDb Error: {e}")
-    return None
 
 # --- BOT COMMANDS ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "🌟 Welcome to Movie Box Bot!")
+    bot.send_message(message.chat.id, "🎬 **MOVIE BOX Bot Premium Edition!**\n\nUse /addmovie to generate a post.", parse_mode="Markdown")
 
-# --- SETTING COMMANDS ---
-@bot.message_handler(commands=['set_tmdb'])
-def set_tmdb(message):
-    if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "🔑 আপনার TMDb API Key পাঠান:")
-    bot.register_next_step_handler(msg, save_setting, "tmdb_api")
-
-@bot.message_handler(commands=['set_ad'])
-def set_ad(message):
-    if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "🟢 নরমাল Step 1 এর অ্যাড কোড পাঠান:")
-    bot.register_next_step_handler(msg, set_ad_step2_normal)
-
-def set_ad_step2_normal(message):
-    settings_col.update_one({"type": "bot_config"}, {"$set": {"ad_step1": message.text}})
-    msg = bot.send_message(message.chat.id, "✅ Step 1 সেভ হয়েছে!\n🟢 এখন নরমাল Step 2 এর অ্যাড কোড পাঠান:")
-    bot.register_next_step_handler(msg, save_setting, "ad_step2")
-
-@bot.message_handler(commands=['set_ad_18'])
-def set_ad_18(message):
-    if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "🔴 18+ Step 1 এর অ্যাড কোড পাঠান:")
-    bot.register_next_step_handler(msg, set_ad_step2_18)
-
-def set_ad_step2_18(message):
-    settings_col.update_one({"type": "bot_config"}, {"$set": {"ad_18_step1": message.text}})
-    msg = bot.send_message(message.chat.id, "✅ 18+ Step 1 সেভ হয়েছে!\n🔴 এখন 18+ Step 2 এর অ্যাড কোড পাঠান:")
-    bot.register_next_step_handler(msg, save_setting, "ad_18_step2")
-
-@bot.message_handler(commands=['set_channel'])
-def set_channel(message):
-    if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "📢 চ্যানেল ইউজারনেম পাঠান:")
-    bot.register_next_step_handler(msg, save_setting, "channel")
-
-@bot.message_handler(commands=['set_file_bot'])
-def set_file_bot(message):
-    if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "🤖 File Store Bot ইউজারনেম দিন (without @):")
-    bot.register_next_step_handler(msg, save_setting, "file_store_bot")
-
-def save_setting(message, key):
-    settings_col.update_one({"type": "bot_config"}, {"$set": {key: message.text}})
-    bot.send_message(message.chat.id, f"✅ {key} সফলভাবে আপডেট হয়েছে!")
-
-
-# ==========================================
-# MOVIE UPLOAD (WITH BEAUTIFUL HTML BUTTONS)
-# ==========================================
-user_data_temp = {}
-
+# --- 1. ADD MOVIE (ADVANCED WORKFLOW) ---
 @bot.message_handler(commands=['addmovie'])
-def add_movie_start(message):
+def add_movie_step1(message):
     if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "🎬 মুভির নাম লিখুন (English এ):")
-    bot.register_next_step_handler(msg, process_movie_name)
+    msg = bot.send_message(message.chat.id, "🎬 মুভির নাম লিখুন (English):")
+    bot.register_next_step_handler(msg, search_tmdb)
 
-def process_movie_name(message):
+def search_tmdb(message):
     movie_name = message.text
-    bot.send_message(message.chat.id, "🔍 TMDb থেকে তথ্য আনা হচ্ছে...")
-    movie_data = fetch_movie_data(movie_name)
-    if not movie_data:
-        bot.send_message(message.chat.id, "❌ মুভি পাওয়া যায়নি! আবার চেষ্টা করুন বা /manualmovie ব্যবহার করুন।")
-        return
-    
-    user_data_temp[message.from_user.id] = movie_data
-    
-    markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("✅ Yes", callback_data="confirm_movie"))
-    bot.send_photo(message.chat.id, movie_data['poster'], caption=f"🎬 {movie_data['title']}\n⭐ IMDb: {movie_data['imdb']}\n\nএই মুভিটি কি?", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data == "confirm_movie")
-def ask_file_link_callback(call):
-    bot.answer_callback_query(call.id) 
-    bot.send_message(call.message.chat.id, "🔗 File Store Bot থেকে পাওয়া ফাইল লিংকটি দিন:")
-    bot.register_next_step_handler(call.message, process_file_link)
-
-def process_file_link(message):
-    user_id = message.from_user.id
-    if user_id not in user_data_temp:
-        bot.send_message(message.chat.id, "❌ Session expired! /addmovie দিয়ে আবার শুরু করুন।")
-        return
-    file_link = message.text
-    user_data_temp[user_id]['file_link'] = file_link
-    
-    markup = telebot.types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    markup.add("🔞 Yes (18+)", "🟢 No (Universal)")
-    bot.send_message(message.chat.id, "🔞 এটি কি 18+ মুভি?", reply_markup=markup)
-    bot.register_next_step_handler(message, save_final_movie)
-
-def save_final_movie(message):
-    user_id = message.from_user.id
-    if user_id not in user_data_temp:
-        bot.send_message(message.chat.id, "❌ Session expired! /addmovie দিয়ে আবার শুরু করুন।")
-        return
-
-    is_18plus = 1 if "Yes" in message.text else 0
-    data = user_data_temp[user_id]
-    
-    title = data['title']; year = data['year']; imdb = data['imdb']; genre = data['genre']; language = data['language']; poster = data['poster']; file_link = data['file_link']
-
-    unlock_token = f"MOV_{title.replace(' ', '_')}_{datetime.now().timestamp()}"
-    
-    movie_doc = {"title": title, "year": year, "imdb": imdb, "genre": genre, "language": language, "poster": poster, "file_link": file_link, "token": unlock_token, "is_18plus": is_18plus}
-    
+    bot.send_message(message.chat.id, "🔍 TMDb থেকে সার্চ করা হচ্ছে...")
+    url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_KEY}&query={movie_name}"
     try:
-        movies_col.insert_one(movie_doc)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Database Error: {e}")
-        del user_data_temp[user_id]
-        return
-
-    render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
-    unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult={is_18plus}"
-    
-    # Beautiful HTML Format for Channel Post
-    channel_text = f"""
-🎬 <b>{title}</b> ({year})
-⭐ <b>IMDb:</b> {imdb}/10
-🎭 <b>Genre:</b> {genre}
-🌐 <b>Language:</b> {language}
-
-🔓 <b>Download Link:</b> 
-<a href="{unlock_link}">⬇️ Click Here to Unlock & Download</a>
-
-⚠️ <i>কপিরাইট ইস্যু থাকলে যোগাযোগ করুন।</i>
-"""
-    
-    markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
-    if data.get('trailer') and data['trailer'] != "N/A":
-        markup.add(telebot.types.InlineKeyboardButton("▶️ Watch Trailer", url=data['trailer']))
-    
-    try:
-        channel_id = get_setting("channel")
-        if not channel_id:
-            bot.send_message(message.chat.id, "❌ Channel not set! Use /set_channel first.")
+        res = requests.get(url).json()
+        if res.get('results'):
+            markup = telebot.types.InlineKeyboardMarkup()
+            for idx, movie in enumerate(res['results'][:5]):
+                title = movie['title']
+                year = movie.get('release_date', 'N/A')[:4]
+                markup.add(telebot.types.InlineKeyboardButton(f"{title} ({year})", callback_data=f"sel_{movie['id']}"))
+            bot.send_message(message.chat.id, "👇 মুভি সিলেক্ট করুন:", reply_markup=markup)
         else:
-            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup, parse_mode="HTML")
-            bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
+            bot.send_message(message.chat.id, "❌ কোনো মুভি পাওয়া যায়নি!")
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nBot কি Channel এ Admin হিসেবে আছে?")
+        bot.send_message(message.chat.id, f"❌ API Error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("sel_"))
+def movie_selected(call):
+    movie_id = call.data.split("_")[1]
+    bot.answer_callback_query(call.id, "মুভি সিলেক্ট হয়েছে!")
     
-    del user_data_temp[user_id]
-
-# --- MANUAL UPLOAD ---
-manual_data = {}
-
-@bot.message_handler(commands=['manualmovie'])
-def manual_start(message):
-    if not is_admin(message.from_user.id): return
-    msg = bot.send_message(message.chat.id, "📝 মুভির নাম লিখুন:")
-    bot.register_next_step_handler(msg, manual_year)
-
-def manual_year(message):
-    manual_data[message.from_user.id] = {'title': message.text}
-    msg = bot.send_message(message.chat.id, "📅 রিলিজ ইয়ার লিখুন (যেমন: 2024):")
-    bot.register_next_step_handler(msg, manual_imdb)
-
-def manual_imdb(message):
-    manual_data[message.from_user.id]['year'] = message.text
-    msg = bot.send_message(message.chat.id, "⭐ IMDb রেটিং লিখুন (যেমন: 8.5):")
-    bot.register_next_step_handler(msg, manual_genre)
-
-def manual_genre(message):
-    manual_data[message.from_user.id]['imdb'] = message.text
-    msg = bot.send_message(message.chat.id, "🎭 জেনার লিখুন (যেমন: Action, Thriller):")
-    bot.register_next_step_handler(msg, manual_lang)
-
-def manual_lang(message):
-    manual_data[message.from_user.id]['genre'] = message.text
-    msg = bot.send_message(message.chat.id, "🌐 ভাষা লিখুন (যেমন: Hindi, English):")
-    bot.register_next_step_handler(msg, manual_file_link)
-
-def manual_file_link(message):
-    manual_data[message.from_user.id]['language'] = message.text
-    msg = bot.send_message(message.chat.id, "🔗 File Store Bot এর ফাইল লিংক দিন:")
-    bot.register_next_step_handler(msg, manual_poster)
-
-def manual_poster(message):
-    manual_data[message.from_user.id]['file_link'] = message.text
-    msg = bot.send_message(message.chat.id, "🖼️ পোস্টার ইমেজ লিংক দিন (অথবা 'None' লিখুন):")
-    bot.register_next_step_handler(msg, manual_18plus)
-
-def manual_18plus(message):
-    manual_data[message.from_user.id]['poster'] = message.text if message.text.lower() != 'none' else "https://via.placeholder.com/200x300"
-    markup = telebot.types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    markup.add("🔞 Yes (18+)", "🟢 No (Universal)")
-    msg = bot.send_message(message.chat.id, "🔞 এটি কি 18+ মুভি?", reply_markup=markup)
-    bot.register_next_step_handler(msg, save_manual_movie)
-
-def save_manual_movie(message):
-    is_18plus = 1 if "Yes" in message.text else 0
-    data = manual_data[message.from_user.id]
+    # Fetch Details
+    details = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_KEY}").json()
+    credits = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/credits?api_key={TMDB_KEY}").json()
+    videos = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_KEY}").json()
+    images = requests.get(f"https://api.themoviedb.org/3/movie/{movie_id}/images?api_key={TMDB_KEY}").json()
     
-    title = data['title']; year = data['year']; imdb = data['imdb']; genre = data['genre']; language = data['language']; poster = data['poster']; file_link = data['file_link']
-
-    unlock_token = f"MOV_{title.replace(' ', '_')}_{datetime.now().timestamp()}"
+    # Process Data
+    trailer_key = ""
+    for v in videos.get('results', []):
+        if v['type'] == 'Trailer' and v['site'] == 'YouTube': trailer_key = v['key']; break
     
-    movie_doc = {"title": title, "year": year, "imdb": imdb, "genre": genre, "language": language, "poster": poster, "file_link": file_link, "token": unlock_token, "is_18plus": is_18plus}
+    cast_data = []
+    for c in credits.get('cast', [])[:4]:
+        cast_data.append({"name": c['name'], "img": f"https://image.tmdb.org/t/p/w200{c['profile_path']}" if c.get('profile_path') else ""})
     
-    try:
-        movies_col.insert_one(movie_doc)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Database Error: {e}")
-        del manual_data[message.from_user.id]
-        return
+    backdrop = ""
+    if images.get('backdrops'):
+        backdrop = f"https://image.tmdb.org/t/p/w780{images['backdrops'][0]['file_path']}"
 
-    render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
-    unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult={is_18plus}"
+    # Save to user workflow
+    user_workflow[call.from_user.id] = {
+        'title': details.get('title', 'N/A'),
+        'year': details.get('release_date', 'N/A')[:4],
+        'imdb': details.get('vote_average', 'N/A'),
+        'genre': ', '.join([g['name'] for g in details.get('genres', [])]),
+        'runtime': str(details.get('runtime', 'N/A')),
+        'plot': details.get('overview', 'N/A'),
+        'poster': f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}",
+        'backdrop': backdrop,
+        'trailer': f"https://youtube.com/watch?v={trailer_key}" if trailer_key else "N/A",
+        'cast': cast_data
+    }
     
-    channel_text = f"""
-🎬 <b>{title}</b> ({year})
-⭐ <b>IMDb:</b> {imdb}/10
-🎭 <b>Genre:</b> {genre}
-🌐 <b>Language:</b> {language}
+    # Ask Language
+    markup = telebot.types.InlineKeyboardMarkup(row_width=3)
+    markup.add(
+        telebot.types.InlineKeyboardButton("🇧🇩 Bangla", callback_data="lang_Bangla"),
+        telebot.types.InlineKeyboardButton("🇮🇳 Hindi", callback_data="lang_Hindi"),
+        telebot.types.InlineKeyboardButton("🇺🇸 English", callback_data="lang_English"),
+        telebot.types.InlineKeyboardButton("🎧 Dual Audio", callback_data="lang_Dual Audio"),
+        telebot.types.InlineKeyboardButton("🌍 Multi Audio", callback_data="lang_Multi Audio")
+    )
+    bot.send_message(call.message.chat.id, "🌐 ভাষা সিলেক্ট করুন:", reply_markup=markup)
 
-🔓 <b>Download Link:</b> 
-<a href="{unlock_link}">⬇️ Click Here to Unlock & Download</a>
-
-⚠️ <i>কপিরাইট ইস্যু থাকলে যোগাযোগ করুন।</i>
-"""
+@bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
+def language_selected(call):
+    lang = call.data.split("_")[1]
+    user_workflow[call.from_user.id]['language'] = lang
+    bot.answer_callback_query(call.id, f"{lang} সিলেক্ট হয়েছে!")
     
+    # Ask Quality
+    markup = telebot.types.InlineKeyboardMarkup(row_width=3)
+    markup.add(
+        telebot.types.InlineKeyboardButton("📱 480P", callback_data="qual_480P"),
+        telebot.types.InlineKeyboardButton("💻 720P", callback_data="qual_720P"),
+        telebot.types.InlineKeyboardButton("🖥️ 1080P", callback_data="qual_1080P"),
+        telebot.types.InlineKeyboardButton("🎥 WEB-DL", callback_data="qual_WEB-DL"),
+        telebot.types.InlineKeyboardButton("💿 BluRay", callback_data="qual_BluRay")
+    )
+    bot.send_message(call.message.chat.id, "📐 কোয়ালিটি সিলেক্ট করুন:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("qual_"))
+def quality_selected(call):
+    qual = call.data.split("_")[1]
+    user_workflow[call.from_user.id]['quality'] = qual
+    bot.answer_callback_query(call.id, f"{qual} সিলেক্ট হয়েছে!")
+    
+    # Ask Download Link
+    msg = bot.send_message(call.message.chat.id, "🔗 ডাউনলোড লিংক দিন:")
+    bot.register_next_step_handler(msg, generate_final_post)
+
+def generate_final_post(message):
+    dl_link = message.text
+    user_workflow[message.from_user.id]['dl_link'] = dl_link
+    data = user_workflow[message.from_user.id]
+    
+    # Generate Premium HTML
+    html_code = generate_premium_html(data)
+    
+    # Send HTML Code with Copy Button
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
+    markup.add(telebot.types.InlineKeyboardButton("📋 Click to Copy Code", copy_text=html_code))
+    
+    bot.send_message(message.chat.id, "✅ **Premium Movie Post Generated!**\n\nনিচের বাটনে ক্লিক করে কোড কপি করে Blogger এ paste করুন।", parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"`{html_code[:100]}...`", reply_markup=markup, parse_mode="Markdown") # Shows preview
+    
+    # Also post a simplified version to Telegram Channel (With Ad Unlock)
+    channel = get_setting("channel")
+    unlock_token = f"MOV_{data['title'].replace(' ', '_')}_{datetime.now().timestamp()}"
+    render_url = os.environ.get("RENDER_URL", "https://movieboxpost-1.onrender.com")
+    unlock_link = f"{render_url}/unlock?token={unlock_token}&is_adult=0"
+    
+    channel_text = f"🎬 **{data['title']}** ({data['year']})\n⭐ IMDb: {data['imdb']}\n🌐 {data['language']} | 📐 {data['quality']}"
+    markup_ch = telebot.types.InlineKeyboardMarkup()
+    markup_ch.add(telebot.types.InlineKeyboardButton("⬇️ Download Now", url=unlock_link))
     
     try:
-        channel_id = get_setting("channel")
-        if not channel_id:
-            bot.send_message(message.chat.id, "❌ Channel not set! Use /set_channel first.")
-        else:
-            bot.send_photo(channel_id, poster, caption=channel_text, reply_markup=markup, parse_mode="HTML")
-            bot.send_message(message.chat.id, "✅ মুভি সফলভাবে চ্যানেলে পোস্ট হয়েছে!")
+        bot.send_photo(channel, data['poster'], caption=channel_text, reply_markup=markup_ch, parse_mode="Markdown")
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Channel Post Failed! Error: {e}\n\nBot কি Channel এ Admin হিসেবে আছে?")
+        bot.send_message(message.chat.id, f"❌ Channel Post Error: {e}")
 
-    del manual_data[message.from_user.id]
+    # Clear Workflow
+    del user_workflow[message.from_user.id]
 
 # --- START BOT & FLASK ---
 if __name__ == '__main__':
     threading.Thread(target=run_flask).start()
-    threading.Thread(target=check_blogger_updates, daemon=True).start()
     bot.infinity_polling()

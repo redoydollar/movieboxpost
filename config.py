@@ -1,8 +1,9 @@
-# এখানে BotFather থেকে পাওয়া টোকেন দিন
-API_ID = 12345678  # my.telegram.org থেকে পাওয়া সংখ্যা
-API_HASH = "your_api_hash_here"  # my.telegram.org থেকে পাওয়া হ্যাশ
-BOT_TOKEN = "your_bot_token_here"  # BotFather থেকে পাওয়া টোকেন
+import os
 
-# MongoDB Atlas থেকে পাওয়া URI (পাসওয়ার্ড দিয়ে দিন)
-MONGO_URI = "mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority"
+# Render থেকে এনভায়রনমেন্ট ভ্যারিয়েবল হিসেবে টোকেনগুলো নেওয়া হবে
+# এখানে কিছু লিখবেন না, ফাঁকা রাখুন
+API_ID = int(os.environ.get("API_ID", "0"))
+API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+MONGO_URI = os.environ.get("MONGO_URI", "")
 DB_NAME = "RenameBotDB"

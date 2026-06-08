@@ -1,12 +1,21 @@
-import os
+import sys
 import asyncio
+
+# পাইথন ভার্সন ৩.১০+ এ Event Loop এরর সমাধানের জন্য ম্যানুয়ালি সেট করা
+if sys.version_info >= (3, 10):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+import os
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from config import API_ID, API_HASH, BOT_TOKEN
 from database import save_thumbnail, get_thumbnail, delete_thumbnail
 from keep_alive import keep_alive
 
-# Render স্লিপ হওয়া ঠেকানো
+# Render স্লিপ হওয়া ঠেকানো
 keep_alive()
 
 # Pyrogram ক্লায়েন্ট শুরু
@@ -117,12 +126,4 @@ if __name__ == "__main__":
         os.mkdir("downloads")
         
     print("Bot is Starting...")
-    
-    # পাইথনের আধুনিক asyncio মেথড ব্যবহার করে বট রান করা
-    async def main():
-        await app.start()
-        print("Bot is now online and running!")
-        await app.idle() # বট কন্টিনিউয়লি চলতে থাকবে
-        await app.stop()
-
-    asyncio.run(main())
+    app.run()

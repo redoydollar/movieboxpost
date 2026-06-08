@@ -1,4 +1,5 @@
 import os
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from config import API_ID, API_HASH, BOT_TOKEN
@@ -117,10 +118,11 @@ if __name__ == "__main__":
         
     print("Bot is Starting...")
     
-    # Render-এর জন্য Event Loop ম্যানুয়ালি তৈরি করা
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    # বট রান করা
-    app.run()
+    # পাইথনের আধুনিক asyncio মেথড ব্যবহার করে বট রান করা
+    async def main():
+        await app.start()
+        print("Bot is now online and running!")
+        await app.idle() # বট কন্টিনিউয়লি চলতে থাকবে
+        await app.stop()
+
+    asyncio.run(main())

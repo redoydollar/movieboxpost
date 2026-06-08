@@ -35,10 +35,9 @@ async def set_thumb(client, message: Message):
 
 @app.on_message(filters.photo & filters.private)
 async def save_thumb(client, message: Message):
-    # সরাসরি ছবির file_id ডেটাবেসে সেভ করা
     file_id = message.photo.file_id
     save_thumbnail(message.from_user.id, file_id)
-    await message.reply_text("✅ কাস্টম থাম্বনেইল সফলভাবে সেভ হয়েছে! এখন থেকে ভিডিওতে এটিই শো করবে।")
+    await message.reply_text("✅ কাস্টম থাম্বনেইল সফলভাবে সেভ হয়েছে!")
 
 # থাম্বনেইল মুছে ফেলা
 @app.on_message(filters.command("delthumb") & filters.private)
@@ -80,14 +79,11 @@ async def rename_file(client, message: Message):
         file_path = await original_msg.download(file_name=f"downloads/{new_name}")
         await status_msg.edit_text("🚀 ফাইল আপলোড হচ্ছে...")
         
-        # থাম্বনেইল চেক করা
         thumb_path = None
         thumb_id = get_thumbnail(user_id)
         if thumb_id:
-            # ডেটাবেস থেকে থাম্বনেইল ডাউনলোড করা
             thumb_path = await client.download_media(thumb_id, file_name="temp_thumb.jpg")
             
-        # ফাইল আপলোড
         if original_msg.document:
             await message.reply_document(
                 document=file_path,
@@ -120,4 +116,11 @@ if __name__ == "__main__":
         os.mkdir("downloads")
         
     print("Bot is Starting...")
+    
+    # Render-এর জন্য Event Loop ম্যানুয়ালি তৈরি করা
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # বট রান করা
     app.run()
